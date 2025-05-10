@@ -1,0 +1,144 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  email        String   @unique
+  passwordHash String   @unique
+  fullName     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  accounts     Account[]
+  categories   Category[]
+  transactions Transaction[]
+  logs         Log[]
+}
+
+enum AccountType {
+  BANK
+  E_WALLET
+  CASH
+  CREDIT_CARD
+}
+
+model Bank {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  code      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts Account[]
+}
+
+model Account {
+  id             String      @id @default(uuid())
+  userId         String
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accountName    String
+  accountType    AccountType
+  initialBalance Decimal     @default(0) @db.Decimal(18, 2)
+  currentBalance Decimal     @default(0) @db.Decimal(18, 2)
+  currency       String      @default("IDR")
+  accountNumber  String?
+  bankId         String?
+  bank           Bank?       @relation(fields: [bankId], references: [id], onDelete: SetNull)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  transactionsAsSource      Transaction[] @relation("SourceTransactions")
+  transactionsAsDestination Transaction[] @relation("DestinationTransactions")
+}
+
+enum CategoryType {
+  INCOME
+  EXPENSE
+}
+
+model Category {
+  id               String        @id @default(uuid())
+  userId           String?
+  user             User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  categoryName     String
+  categoryType     CategoryType
+  parentCategoryId String?
+  parentCategory   Category?     @relation("SubCategories", fields: [parentCategoryId], references: [id])
+  subCategories    Category[]    @relation("SubCategories")
+  icon             String?
+  color            String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  transactions     Transaction[]
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  TRANSFER
+}
+
+model Transaction {
+  id                   String          @id @default(uuid())
+  userId               String
+  user                 User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactionType      TransactionType
+  amount               Decimal         @db.Decimal(18, 2)
+  transactionDate      DateTime        @default(now())
+  description          String?
+  categoryId           String?
+  category             Category?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  sourceAccountid      String?
+  sourceAccount        Account?        @relation("SourceTransactions", fields: [sourceAccountid], references: [id], onDelete: SetNull)
+  destinationAccountId String?
+  destinationAccount   Account?        @relation("DestinationTransactions", fields: [destinationAccountId], references: [id], onDelete: SetNull)
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+}
+
+enum LogActionType {
+  USER_REGISTER
+  USER_LOGIN
+  USER_LOGOUT
+  USER_PROFILE_UPDATE
+  ACCOUNT_CREATE
+  ACCOUNT_UPDATE
+  ACCOUNT_DELETE
+  CATEGORY_CREATE
+  CATEGORY_UPDATE
+  CATEGORY_DELETE
+  TRANSACTION_CREATE_INCOME
+  TRANSACTION_CREATE_EXPENSE
+  TRANSACTION_CREATE_TRANSFER
+  TRANSACTION_UPDATE
+  TRANSACTION_DELETE
+}
+
+model Log {
+  id          String        @id @default(uuid())
+  userId      String?
+  user        User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  timestamp   DateTime      @default(now())
+  actionType  LogActionType
+  entityType  String? // e.g "Account", "Transaction"
+  entityId    String?
+  description String?
+  details     Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime      @default(now())
+}
