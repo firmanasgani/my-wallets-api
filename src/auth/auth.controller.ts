@@ -15,6 +15,7 @@ import { User, User as UserModel } from '@prisma/client';
 import { LoginDto } from './dto/login.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { GetUser } from 'src/common/decorators/get-user.decorator';
+import { Request } from 'express';
 
 @Controller('auth')
 export class AuthController {
@@ -24,20 +25,28 @@ export class AuthController {
 
     @Post('register')
     async register(
-        @Body() registerDto: RegisterDto
+        @Body() registerDto: RegisterDto,
+        @Req() req: Request
     ): Promise<Omit<User, 'passwordHash'>> {
-        return this.authService.register(registerDto); 
+        const ipAddress = req.ip
+        const userAgent = req.headers['user-agent']
+        return this.authService.register(registerDto, ipAddress, userAgent); 
     }
 
     @HttpCode(HttpStatus.OK)
     @Post('login')
-    async login(@Body() loginDto: LoginDto) {
+    async login(
+        @Body() loginDto: LoginDto,
+        @Req() req: Request
+    ) {
+        const ipAddress = req.ip   
+        const userAgent = req.headers['user-agent']
         const user = await this.authService.validateUser(loginDto.login, loginDto.password)
         if(!user) {
             throw new UnauthorizedException('Invalid credentials')
         }
 
-        return this.authService.login(user);
+        return this.authService.login(user, ipAddress, userAgent);
     }
 
     @UseGuards(JwtAuthGuard)
