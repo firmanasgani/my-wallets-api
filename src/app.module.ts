@@ -8,6 +8,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AccountsModule } from './accounts/accounts.module';
 import { LogsModule } from './logs/logs.module';
 import { CategoriesModule } from './categories/categories.module';
+import { TransactionsModule } from './transactions/transactions.module';
 
 @Module({
   imports: [
@@ -17,7 +18,8 @@ import { CategoriesModule } from './categories/categories.module';
     AuthModule,
     AccountsModule,
     LogsModule,
-    CategoriesModule
+    CategoriesModule,
+    TransactionsModule
   ],
   controllers: [AppController],
   providers: [AppService],
