@@ -8,6 +8,10 @@ import {
   Req,
   HttpCode,
   HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Delete,
+  Patch,
 } from '@nestjs/common';
 import { TransactionsService } from './transactions.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -18,6 +22,7 @@ import { CreateIncomeDto } from './dto/create-income.dto';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { CreateTransferDto } from './dto/create-transfer.dto';
 import { QueryTransactionDto } from './dto/query-transaction.dto';
+import { UpdateTransactionDto } from './dto/update-transaction.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('transactions')
@@ -72,5 +77,48 @@ export class TransactionsController {
   @Get()
   findAll(@GetUser() user: UserModel, @Query() queryDto: QueryTransactionDto) {
     return this.transactionsService.findAll(user.id, queryDto);
+  }
+
+  @Get(':id')
+  findOne(
+    @GetUser() user: UserModel,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+  ) {
+    return this.transactionsService.findOne(user.id, id);
+  }
+
+  @Patch(':id')
+  update(
+    @GetUser() user: UserModel,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) transactionId: string,
+    @Body() updateTransactionDto: UpdateTransactionDto,
+    @Req() req: Request, // Inject Request untuk IP dan User Agent
+  ) {
+    const ipAddress = req.ip;
+    const userAgent = req.headers['user-agent'];
+    return this.transactionsService.update(
+      user.id,
+      transactionId,
+      updateTransactionDto,
+      ipAddress,
+      userAgent,
+    );
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK) // Atau HttpStatus.NO_CONTENT (204) jika tidak ada body respons
+  remove(
+    @GetUser() user: UserModel,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) transactionId: string,
+    @Req() req: Request, // Inject Request untuk IP dan User Agent
+  ) {
+    const ipAddress = req.ip;
+    const userAgent = req.headers['user-agent'];
+    return this.transactionsService.remove(
+      user.id,
+      transactionId,
+      ipAddress,
+      userAgent,
+    );
   }
 }
