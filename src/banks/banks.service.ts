@@ -10,7 +10,7 @@ export class BanksService {
 
     async findAll(): Promise<Bank[]> {
         const banks = await this.Prisma.bank.findMany({
-            orderBy: { bankName: 'asc' }
+            orderBy: { name: 'asc' }
         })
         return banks
     }
