@@ -259,7 +259,7 @@ export class CategoriesService {
 
     const updatedCategory = await this.prisma.category.update({
       where: { id: categoryId },
-      data: updateCategoryDto,
+      data: {categoryName: name, parentCategoryId: parentId, categoryType: type},
     });
 
     await this.logsService.create({
