@@ -590,7 +590,6 @@ export class TransactionsService {
         const newCategory = await this.prisma.category.findFirst({
           where: {
             id: categoryId,
-            OR: [{ userId }, { userId: null }], // Kategori milik user atau global
           },
         });
         if (!newCategory) {

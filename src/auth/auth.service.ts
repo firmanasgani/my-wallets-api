@@ -1,16 +1,19 @@
 import { ConflictException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { defaultCategoryTemplates } from 'src/common/category'
 import { UsersService } from 'src/users/users.service';
 import { RegisterDto } from './dto/register.dto';
 import * as bcrypt from 'bcrypt';
 import { LogActionType, Prisma, User } from '@prisma/client';
 import { LogsService } from 'src/logs/logs.service';
+import { PrismaService } from 'src/prisma/prisma.service';
 
 @Injectable()
 export class AuthService {
     constructor(
         private usersService: UsersService,
         private jwtService: JwtService,
+        private prisma: PrismaService,
         private logsService: LogsService
     ) {}
 
@@ -30,45 +33,84 @@ export class AuthService {
             throw new ConflictException('Username already registered.')
         }
         const saltRounds = 10
-        const passwordHash = await bcrypt.hash(password, saltRounds);
-        
-        let user: User
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
         try {
-            user = await this.usersService.create({
-                username,
-                email,
-                passwordHash,
-                fullName
+            const newUserAndCategories = await this.prisma.$transaction(async (tx) => {
+                const newUser = await tx.user.create({
+                    data: {
+                        username,
+                        email,
+                        passwordHash: hashedPassword,
+                        fullName: fullName || null
+                    }
+                })
+
+                for (const template of defaultCategoryTemplates) {
+                    const parentCategory = await tx.category.create({
+                        data: {
+                            categoryName: template.categoryName,
+                            categoryType: template.categoryType,
+                            userId: newUser.id,
+                            parentCategoryId: null,
+                            icon: template.icon,
+                            color: template.color
+                        }
+                    })
+                    if(template.subCategories && template.subCategories.length > 0) {
+                        for(const subTemplate of template.subCategories) {
+                            await tx.category.create({
+                                data: {
+                                    categoryName: subTemplate.categoryName,
+                                    categoryType: subTemplate.categoryType,
+                                    userId: newUser.id,
+                                    parentCategoryId: parentCategory.id,
+                                    icon: subTemplate.icon,
+                                    color: subTemplate.color
+                                }
+                            })
+                        }
+                    }
+                }
+
+                return newUser
             })
 
-            
-        }catch( error ) {
-            if(error instanceof Prisma.PrismaClientUnknownRequestError) {
-                throw new ConflictException("Username or Email already registered.");
+            try {
+                await this.logsService.create({
+                    userId: newUserAndCategories.id,
+                    actionType: LogActionType.USER_REGISTER,
+                    entityType: 'USER',
+                    entityId: newUserAndCategories.id,
+                    description: `User ${newUserAndCategories.username} registered`,
+                    details: { username: newUserAndCategories.username, method: 'credentials'},
+                    ipAddress: ipAddress ?? "",
+                    userAgent: userAgent ?? "",
+                })
+            } catch (error) {
+                Logger.error('Failed to create log entry', {
+                    errorMessage: error.message,
+                    dto: {
+                        userId: newUserAndCategories.id,
+                        actionType: LogActionType.USER_REGISTER,
+                        entityType: 'USER',
+                        entityId: newUserAndCategories.id,
+                        description: `User ${newUserAndCategories.username} registered`,
+                        details: { username: newUserAndCategories.username, method: 'credentials'},
+                        ipAddress: ipAddress ?? "",
+                        userAgent: userAgent ?? "",
+                    },
+                    stack: error.stack,
+                });
             }
-            throw new InternalServerErrorException('Could not register User.');
+            const { passwordHash, ...result } = newUserAndCategories;
+            return result as Omit<User, 'passwordHash'>;
+            
+        }catch(error) {
+            console.error("Error creating user:", error);
+            throw new InternalServerErrorException('Error creating user');
         }
-
-        try {
-            await this.logsService.create({
-                actionType: LogActionType.USER_REGISTER,
-                entityType: 'USER',
-                entityId: user.id,
-                description: 'User registered',
-                details: {
-                    username: user.username,
-                    email: user.email,
-                    fullName: user.fullName
-                },
-                ipAddress: ipAddress ?? "",
-                userAgent: userAgent ?? "",
-                userId: user.id
-            })
-        }catch( error ) {
-            Logger.log(`Failed to create log entry: ${error.message}`);
-        }
-
-        return user
+        
+       
     }
 
     async validateUser(

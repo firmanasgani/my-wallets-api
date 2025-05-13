@@ -29,7 +29,7 @@ export class CategoriesService {
       const parentCategory = await this.prisma.category.findFirst({
         where: {
           id: parentId,
-          OR: [{ userId: userId }, { userId: null }],
+
         },
       });
 
@@ -96,7 +96,6 @@ export class CategoriesService {
       OR: [
         
           { userId: userId},
-          ...(includeGlobal === 'true' ? [{ userId: null }] : []),
         
       ],
       ...(categoryType && { categoryType: categoryType }),
@@ -128,7 +127,6 @@ export class CategoriesService {
       const parentCategory = await this.prisma.category.findFirst({
         where: {
           id: parentOnly,
-          OR: [{ userId: userId }, { userId: null }],
         },
       });
 
@@ -162,7 +160,6 @@ export class CategoriesService {
     const category = await this.prisma.category.findFirst({
       where: {
         id,
-        OR: [{ userId: userId }, { userId: null }],
       },
       include: {
         parentCategory: true,
@@ -205,7 +202,6 @@ export class CategoriesService {
         const parentCategory = await this.prisma.category.findFirst({
           where: {
             id: parentId,
-            OR: [{ userId: userId }, { userId: null }],
           },
         });
 
@@ -292,7 +288,6 @@ export class CategoriesService {
     const category = await this.prisma.category.findFirst({
       where: {
         id,
-        OR: [{ userId: userId }, { userId: null }],
       },
     });
 
