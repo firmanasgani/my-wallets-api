@@ -10,6 +10,8 @@ import { LogsModule } from './logs/logs.module';
 import { CategoriesModule } from './categories/categories.module';
 import { TransactionsModule } from './transactions/transactions.module';
 import { BanksModule } from './banks/banks.module';
+import { APP_GUARD } from '@nestjs/core';
+import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 
 @Module({
   imports: [
@@ -21,9 +23,15 @@ import { BanksModule } from './banks/banks.module';
     LogsModule,
     CategoriesModule,
     TransactionsModule,
-    BanksModule
+    BanksModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
+    },
+  ],
 })
 export class AppModule {}

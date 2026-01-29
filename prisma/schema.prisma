@@ -6,27 +6,27 @@
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../node_modules/.prisma/client"
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
 model User {
-  id           String   @id @default(uuid())
-  username     String   @unique
-  email        String   @unique
-  passwordHash String   @unique
-  fullName     String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id             String   @id @default(uuid())
+  username       String   @unique
+  email          String   @unique
+  passwordHash   String   @unique
+  fullName       String?
+  profilePicture String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  accounts Account[]
-  categories Category[]
+  accounts     Account[]
+  categories   Category[]
   transactions Transaction[]
-  logs Log[]
+  logs         Log[]
 }
 
 enum AccountType {
@@ -61,7 +61,7 @@ model Account {
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
-  transactionsAsSource Transaction[] @relation("SourceTransactions")
+  transactionsAsSource      Transaction[] @relation("SourceTransactions")
   transactionsAsDestination Transaction[] @relation("DestinationTransactions")
 }
 
@@ -71,19 +71,20 @@ enum CategoryType {
 }
 
 model Category {
-  id String @id @default(uuid())
-  userId String
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade) 
-  categoryName String
-  categoryType CategoryType
+  id               String        @id @default(uuid())
+  userId           String
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  categoryName     String
+  categoryType     CategoryType
   parentCategoryId String?
-  parentCategory Category? @relation("SubCategories", fields: [parentCategoryId], references: [id])
-  subCategories Category[] @relation("SubCategories")
-  icon String?
-  color String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  transactions Transaction[]
+  parentCategory   Category?     @relation("SubCategories", fields: [parentCategoryId], references: [id])
+  subCategories    Category[]    @relation("SubCategories")
+  icon             String?
+  color            String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  transactions     Transaction[]
+
   @@unique([userId, categoryName, categoryType, parentCategoryId])
 }
 
@@ -94,21 +95,21 @@ enum TransactionType {
 }
 
 model Transaction {
-  id String @id @default(uuid())
-  userId String
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  transactionType TransactionType
-  amount Decimal @db.Decimal(18, 2)
-  transactionDate DateTime @default(now())
-  description String? 
-  categoryId String?
-  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  sourceAccountid String? 
-  sourceAccount Account? @relation("SourceTransactions",fields: [sourceAccountid], references: [id], onDelete: SetNull)
+  id                   String          @id @default(uuid())
+  userId               String
+  user                 User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactionType      TransactionType
+  amount               Decimal         @db.Decimal(18, 2)
+  transactionDate      DateTime        @default(now())
+  description          String?
+  categoryId           String?
+  category             Category?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  sourceAccountid      String?
+  sourceAccount        Account?        @relation("SourceTransactions", fields: [sourceAccountid], references: [id], onDelete: SetNull)
   destinationAccountId String?
-  destinationAccount Account? @relation("DestinationTransactions", fields: [destinationAccountId], references: [id], onDelete: SetNull)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  destinationAccount   Account?        @relation("DestinationTransactions", fields: [destinationAccountId], references: [id], onDelete: SetNull)
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
 }
 
 enum LogActionType {
@@ -130,16 +131,16 @@ enum LogActionType {
 }
 
 model Log {
-  id String @id @default(uuid())
-  userId String?
-  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
-  timestamp DateTime @default(now())
-  actionType LogActionType
-  entityType String?  // e.g "Account", "Transaction"
-  entityId String?
+  id          String        @id @default(uuid())
+  userId      String?
+  user        User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  timestamp   DateTime      @default(now())
+  actionType  LogActionType
+  entityType  String? // e.g "Account", "Transaction"
+  entityId    String?
   description String?
-  details Json?
-  ipAddress String?
-  userAgent String?
-  createdAt DateTime @default(now()) 
+  details     Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime      @default(now())
 }
