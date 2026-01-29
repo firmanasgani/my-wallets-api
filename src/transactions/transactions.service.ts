@@ -316,7 +316,7 @@ export class TransactionsService {
       ...(startDate ? { transactionDate: { gte: new Date(startDate) } } : {}),
       ...(endDate ? { transactionDate: { lte: new Date(endDate) } } : {}),
       ...(search
-        ? { description: { contains: search, mode: 'insensitive' } }
+        ? { description: { contains: search, mode: 'insensitive' } as any }
         : {}),
       ...(accountId
         ? {
