@@ -1,5 +1,5 @@
 import {
-    BadRequestException,
+  BadRequestException,
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
@@ -9,7 +9,12 @@ import {
 import { LogsService } from 'src/logs/logs.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateIncomeDto } from './dto/create-income.dto';
-import { CategoryType, LogActionType, Prisma, TransactionType } from '@prisma/client';
+import {
+  CategoryType,
+  LogActionType,
+  Prisma,
+  TransactionType,
+} from '@prisma/client';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { CreateTransferDto } from './dto/create-transfer.dto';
 import { QueryTransactionDto } from './dto/query-transaction.dto';
@@ -301,6 +306,7 @@ export class TransactionsService {
       limit = 10,
       sortBy = 'transactionDate',
       sortOrder = 'desc',
+      search,
     } = query;
 
     const whereClause: Prisma.TransactionWhereInput = {
@@ -309,6 +315,9 @@ export class TransactionsService {
       ...(categoryId ? { categoryId } : {}),
       ...(startDate ? { transactionDate: { gte: new Date(startDate) } } : {}),
       ...(endDate ? { transactionDate: { lte: new Date(endDate) } } : {}),
+      ...(search
+        ? { description: { contains: search, mode: 'insensitive' } }
+        : {}),
       ...(accountId
         ? {
             OR: [
@@ -524,7 +533,7 @@ export class TransactionsService {
     }
   }
 
-    async update(
+  async update(
     userId: string,
     transactionId: string,
     updateTransactionDto: UpdateTransactionDto,
@@ -536,7 +545,7 @@ export class TransactionsService {
       where: { id: transactionId, userId },
       // Tidak perlu include relasi jika hanya update field dasar,
       // tapi bisa berguna untuk validasi kategori atau logging.
-      include: { category: true }
+      include: { category: true },
     });
 
     if (!existingTransaction) {
@@ -547,17 +556,23 @@ export class TransactionsService {
 
     // Simpan nilai lama untuk logging
     const oldValues = {
-        description: existingTransaction.description,
-        transactionDate: existingTransaction.transactionDate.toISOString().split('T')[0], // Format YYYY-MM-DD
-        categoryId: existingTransaction.categoryId,
-        categoryName: existingTransaction.category?.categoryName, // Ambil nama kategori jika ada
-        // amount: existingTransaction.amount.toNumber(), // Jika kita mengizinkan update amount
+      description: existingTransaction.description,
+      transactionDate: existingTransaction.transactionDate
+        .toISOString()
+        .split('T')[0], // Format YYYY-MM-DD
+      categoryId: existingTransaction.categoryId,
+      categoryName: existingTransaction.category?.categoryName, // Ambil nama kategori jika ada
+      // amount: existingTransaction.amount.toNumber(), // Jika kita mengizinkan update amount
     };
 
-    const { amount, categoryId, transactionDate, description } = updateTransactionDto;
+    const { amount, categoryId, transactionDate, description } =
+      updateTransactionDto;
 
     // **PENTING: Batasan untuk versi awal**
-    if (amount !== undefined && amount !== existingTransaction.amount.toNumber()) {
+    if (
+      amount !== undefined &&
+      amount !== existingTransaction.amount.toNumber()
+    ) {
       // Prisma mengembalikan Decimal, jadi konversi ke number untuk perbandingan jika perlu
       throw new BadRequestException(
         'Updating the transaction amount is not supported in this version. Please delete and recreate the transaction if amount needs to be changed.',
@@ -576,14 +591,17 @@ export class TransactionsService {
     }
 
     if (categoryId !== undefined) {
-      if (categoryId === null) { // Jika user ingin menghapus kategori dari transaksi
+      if (categoryId === null) {
+        // Jika user ingin menghapus kategori dari transaksi
         if (existingTransaction.transactionType === TransactionType.TRANSFER) {
-            dataToUpdate.category = { disconnect: true };
+          dataToUpdate.category = { disconnect: true };
         } else {
-            // Untuk INCOME/EXPENSE, kategori biasanya wajib.
-            // Bisa pilih untuk melarang, atau membiarkan jika skema memperbolehkan categoryId null untuk semua tipe.
-            // Asumsi kita: kategori wajib untuk INCOME/EXPENSE.
-            throw new BadRequestException('Category cannot be removed from Income or Expense transactions.');
+          // Untuk INCOME/EXPENSE, kategori biasanya wajib.
+          // Bisa pilih untuk melarang, atau membiarkan jika skema memperbolehkan categoryId null untuk semua tipe.
+          // Asumsi kita: kategori wajib untuk INCOME/EXPENSE.
+          throw new BadRequestException(
+            'Category cannot be removed from Income or Expense transactions.',
+          );
         }
       } else {
         // Validasi kategori baru
@@ -593,17 +611,25 @@ export class TransactionsService {
           },
         });
         if (!newCategory) {
-          throw new BadRequestException(`New category with ID ${categoryId} not found or not accessible.`);
+          throw new BadRequestException(
+            `New category with ID ${categoryId} not found or not accessible.`,
+          );
         }
         // Validasi tipe kategori vs tipe transaksi
-        if (existingTransaction.transactionType === TransactionType.INCOME && newCategory.categoryType !== CategoryType.INCOME) {
-          throw new BadRequestException( 
+        if (
+          existingTransaction.transactionType === TransactionType.INCOME &&
+          newCategory.categoryType !== CategoryType.INCOME
+        ) {
+          throw new BadRequestException(
             `Category '${newCategory.categoryName}' is not an INCOME category.`,
           );
         }
-        if (existingTransaction.transactionType === TransactionType.EXPENSE && newCategory.categoryType !== CategoryType.EXPENSE) {
+        if (
+          existingTransaction.transactionType === TransactionType.EXPENSE &&
+          newCategory.categoryType !== CategoryType.EXPENSE
+        ) {
           throw new BadRequestException(
-            `Category '${newCategory.categoryName}' is not an EXPENSE category.`, 
+            `Category '${newCategory.categoryName}' is not an EXPENSE category.`,
           );
         }
         // Untuk TRANSFER, categoryId biasanya null, jadi jika di-set, kita tidak terlalu membatasi tipenya.

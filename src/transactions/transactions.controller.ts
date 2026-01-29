@@ -74,6 +74,18 @@ export class TransactionsController {
     );
   }
 
+  @Get('account/:accountId')
+  findByAccount(
+    @GetUser() user: UserModel,
+    @Param('accountId', new ParseUUIDPipe({ version: '4' })) accountId: string,
+    @Query() queryDto: QueryTransactionDto,
+  ) {
+    return this.transactionsService.findAll(user.id, {
+      ...queryDto,
+      accountId,
+    });
+  }
+
   @Get()
   findAll(@GetUser() user: UserModel, @Query() queryDto: QueryTransactionDto) {
     return this.transactionsService.findAll(user.id, queryDto);

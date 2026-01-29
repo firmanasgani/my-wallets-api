@@ -16,6 +16,7 @@ import { LogsService } from 'src/logs/logs.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { MinioService } from 'src/common/minio/minio.service';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class AuthService {
@@ -280,10 +281,11 @@ export class AuthService {
       throw new BadRequestException('User not found');
     }
 
-    // Generate unique filename with timestamp
+    // Generate unique filename with timestamp and uuid
     const timestamp = Date.now();
     const fileExtension = file.originalname.split('.').pop();
-    const fileName = `${timestamp}-${file.originalname}`;
+    const uniqueId = randomUUID();
+    const fileName = `${timestamp}-${uniqueId}.${fileExtension}`;
     const filePath = `/profile/${fileName}`;
 
     try {
