@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { AccountType, LogActionType, Prisma } from '@prisma/client';
@@ -27,6 +32,20 @@ export class AccountsService {
       ...restData
     } = createAccountDto;
     let resolvedBankId: string | null = null;
+
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new BadRequestException('User not found');
+
+    if (user.subscriptionPlan === 'FREE') {
+      const accountCount = await this.prisma.account.count({
+        where: { userId },
+      });
+      if (accountCount >= 4) {
+        throw new ForbiddenException(
+          'Free plan users are limited to 4 accounts. Please upgrade to create more.',
+        );
+      }
+    }
 
     if (accountType == AccountType.BANK) {
       if (!bankId)
@@ -253,6 +272,4 @@ export class AccountsService {
       message: `Account ${account.accountName} has been deleted`,
     };
   }
-
-  
 }

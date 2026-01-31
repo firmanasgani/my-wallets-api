@@ -345,6 +345,137 @@ export class AuthService {
     }
   }
 
+  async deleteProfilePicture(
+    userId: string,
+    ipAddress?: string,
+    userAgent?: string,
+  ) {
+    // Get user to check if they have existing profile picture
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new BadRequestException('User not found');
+    }
+
+    if (!user.profilePicture) {
+      throw new BadRequestException('No profile picture to delete');
+    }
+
+    try {
+      // Delete file from MinIO
+      await this.minioService.deleteFile(user.profilePicture);
+
+      // Update user profile picture path in database to null
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { profilePicture: null },
+      });
+
+      // Log the profile picture deletion
+      try {
+        await this.logsService.create({
+          userId,
+          actionType: LogActionType.USER_PROFILE_UPDATE,
+          entityType: 'USER',
+          entityId: userId,
+          description: `User ${user.username} deleted profile picture`,
+          details: {
+            action: 'profile_picture_delete',
+            oldPath: user.profilePicture,
+          },
+          ipAddress: ipAddress ?? '',
+          userAgent: userAgent ?? '',
+        });
+      } catch (error) {
+        Logger.error(
+          'Failed to create log entry for profile picture deletion',
+          {
+            errorMessage: error.message,
+            userId,
+          },
+        );
+      }
+
+      return {
+        message: 'Profile picture deleted successfully',
+      };
+    } catch (error) {
+      Logger.error('Error deleting profile picture', error);
+      throw new InternalServerErrorException(
+        'Failed to delete profile picture',
+      );
+    }
+  }
+
+  async deleteAccount(userId: string, ipAddress?: string, userAgent?: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new BadRequestException('User not found');
+    }
+
+    try {
+      // 1. Delete profile picture from MinIO if exists
+      if (user.profilePicture) {
+        try {
+          await this.minioService.deleteFile(user.profilePicture);
+        } catch (error) {
+          Logger.warn(
+            `Failed to delete profile picture during account deletion: ${error.message}`,
+          );
+        }
+      }
+
+      // 2. Delete all user data in a transaction to ensure complete cleanup
+      await this.prisma.$transaction(async (tx) => {
+        // Delete Budgets
+        await tx.budget.deleteMany({ where: { userId } });
+
+        // Delete Transactions
+        await tx.transaction.deleteMany({ where: { userId } });
+
+        // Delete Accounts (Transactions referencing these will be SetNull or already deleted)
+        await tx.account.deleteMany({ where: { userId } });
+
+        // Delete Categories
+        await tx.category.deleteMany({ where: { userId } });
+
+        // Delete User
+        await tx.user.delete({ where: { id: userId } });
+
+        // Input log
+        await tx.log.create({
+          data: {
+            userId,
+            actionType: LogActionType.USER_DELETE,
+            entityType: 'USER',
+            entityId: userId,
+            description: `User ${user.username} deleted their account`,
+            details: {
+              action: 'account_deletion',
+            },
+            ipAddress: ipAddress ?? '',
+            userAgent: userAgent ?? '',
+          },
+        });
+      });
+
+      // 3. Log the account deletion
+      Logger.log(`User ${user.username} (${user.id}) deleted their account`);
+
+      return {
+        message: 'Account and all associated data deleted successfully',
+      };
+    } catch (error) {
+      Logger.error('Error deleting account', error);
+      throw new InternalServerErrorException('Failed to delete account');
+    }
+  }
+
   async getProfileWithUrl(
     userId: string,
   ): Promise<Omit<User, 'passwordHash'> & { profilePictureUrl?: string }> {

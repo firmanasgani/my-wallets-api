@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -25,11 +26,43 @@ export class CategoriesService {
   ): Promise<Category> {
     const { name, type, parentId, icon, color } = createCategoryDto;
 
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new BadRequestException('User not found');
+
+    if (user.subscriptionPlan === 'FREE') {
+      if (!parentId) {
+        // Parent Category Limit
+        const parentCount = await this.prisma.category.count({
+          where: {
+            userId,
+            categoryType: type,
+            parentCategoryId: null,
+          },
+        });
+        if (parentCount >= 10) {
+          throw new ForbiddenException(
+            `Free plan users are limited to 10 ${type} parent categories. Please upgrade to add more.`,
+          );
+        }
+      } else {
+        // Sub Category Limit
+        const subCount = await this.prisma.category.count({
+          where: {
+            parentCategoryId: parentId,
+          },
+        });
+        if (subCount >= 3) {
+          throw new ForbiddenException(
+            'Free plan users are limited to 3 sub-categories per parent category. Please upgrade to add more.',
+          );
+        }
+      }
+    }
+
     if (parentId) {
       const parentCategory = await this.prisma.category.findFirst({
         where: {
           id: parentId,
-
         },
       });
 
@@ -93,11 +126,7 @@ export class CategoriesService {
       parentOnly,
     } = queryDto;
     const whereClause: Prisma.CategoryWhereInput = {
-      OR: [
-        
-          { userId: userId},
-        
-      ],
+      OR: [{ userId: userId }],
       ...(categoryType && { categoryType: categoryType }),
     };
 
@@ -259,7 +288,11 @@ export class CategoriesService {
 
     const updatedCategory = await this.prisma.category.update({
       where: { id: categoryId },
-      data: {categoryName: name, parentCategoryId: parentId, categoryType: type},
+      data: {
+        categoryName: name,
+        parentCategoryId: parentId,
+        categoryType: type,
+      },
     });
 
     await this.logsService.create({

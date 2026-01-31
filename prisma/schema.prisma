@@ -23,10 +23,18 @@ model User {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  accounts     Account[]
-  categories   Category[]
-  transactions Transaction[]
-  logs         Log[]
+  accounts         Account[]
+  categories       Category[]
+  transactions     Transaction[]
+  logs             Log[]
+  budgets          Budget[]
+  subscriptionPlan SubscriptionPlan @default(FREE)
+}
+
+enum SubscriptionPlan {
+  FREE
+  PREMIUM
+  FAMILY
 }
 
 enum AccountType {
@@ -84,6 +92,7 @@ model Category {
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
   transactions     Transaction[]
+  budgets          Budget[]
 
   @@unique([userId, categoryName, categoryType, parentCategoryId])
 }
@@ -116,6 +125,7 @@ enum LogActionType {
   USER_REGISTER
   USER_LOGIN
   USER_LOGOUT
+  USER_DELETE
   USER_PROFILE_UPDATE
   ACCOUNT_CREATE
   ACCOUNT_UPDATE
@@ -143,4 +153,20 @@ model Log {
   ipAddress   String?
   userAgent   String?
   createdAt   DateTime      @default(now())
+}
+
+model Budget {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  amount      Decimal  @db.Decimal(18, 2)
+  year        Int
+  month       Int
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, year, month, categoryId])
 }

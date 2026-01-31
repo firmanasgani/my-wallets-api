@@ -11,6 +11,7 @@ import {
   UseInterceptors,
   UploadedFile,
   BadRequestException,
+  Delete,
 } from '@nestjs/common';
 import { RegisterDto } from './dto/register.dto';
 import { AuthService } from './auth.service';
@@ -96,5 +97,20 @@ export class AuthController {
       ipAddress,
       userAgent,
     );
+  }
+
+  @Delete('profile-picture')
+  @HttpCode(HttpStatus.OK)
+  async deleteProfilePicture(@GetUser() user: UserModel, @Req() req: Request) {
+    const ipAddress = req.ip;
+    const userAgent = req.headers['user-agent'];
+    return this.authService.deleteProfilePicture(user.id, ipAddress, userAgent);
+  }
+  @Delete('delete-account')
+  @HttpCode(HttpStatus.OK)
+  async deleteAccount(@GetUser() user: UserModel, @Req() req: Request) {
+    const ipAddress = req.ip;
+    const userAgent = req.headers['user-agent'];
+    return this.authService.deleteAccount(user.id, ipAddress, userAgent);
   }
 }
