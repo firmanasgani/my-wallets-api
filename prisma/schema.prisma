@@ -23,12 +23,13 @@ model User {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  accounts         Account[]
-  categories       Category[]
-  transactions     Transaction[]
-  logs             Log[]
-  budgets          Budget[]
-  subscriptionPlan SubscriptionPlan @default(FREE)
+  accounts              Account[]
+  categories            Category[]
+  transactions          Transaction[]
+  recurringTransactions RecurringTransaction[]
+  logs                  Log[]
+  budgets               Budget[]
+  subscriptionPlan      SubscriptionPlan       @default(FREE)
 }
 
 enum SubscriptionPlan {
@@ -71,6 +72,9 @@ model Account {
 
   transactionsAsSource      Transaction[] @relation("SourceTransactions")
   transactionsAsDestination Transaction[] @relation("DestinationTransactions")
+
+  recurringTransactionsAsSource      RecurringTransaction[] @relation("SourceRecurringTransactions")
+  recurringTransactionsAsDestination RecurringTransaction[] @relation("DestinationRecurringTransactions")
 }
 
 enum CategoryType {
@@ -79,20 +83,21 @@ enum CategoryType {
 }
 
 model Category {
-  id               String        @id @default(uuid())
-  userId           String
-  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  categoryName     String
-  categoryType     CategoryType
-  parentCategoryId String?
-  parentCategory   Category?     @relation("SubCategories", fields: [parentCategoryId], references: [id])
-  subCategories    Category[]    @relation("SubCategories")
-  icon             String?
-  color            String?
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
-  transactions     Transaction[]
-  budgets          Budget[]
+  id                    String                 @id @default(uuid())
+  userId                String
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  categoryName          String
+  categoryType          CategoryType
+  parentCategoryId      String?
+  parentCategory        Category?              @relation("SubCategories", fields: [parentCategoryId], references: [id])
+  subCategories         Category[]             @relation("SubCategories")
+  icon                  String?
+  color                 String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  transactions          Transaction[]
+  recurringTransactions RecurringTransaction[]
+  budgets               Budget[]
 
   @@unique([userId, categoryName, categoryType, parentCategoryId])
 }
@@ -101,6 +106,18 @@ enum TransactionType {
   INCOME
   EXPENSE
   TRANSFER
+}
+
+enum RecurringInterval {
+  DAILY
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+enum RecurringStatus {
+  ACTIVE
+  INACTIVE
 }
 
 model Transaction {
@@ -119,6 +136,12 @@ model Transaction {
   destinationAccount   Account?        @relation("DestinationTransactions", fields: [destinationAccountId], references: [id], onDelete: SetNull)
   createdAt            DateTime        @default(now())
   updatedAt            DateTime        @updatedAt
+
+  recurringTransactionId String?
+  recurringTransaction   RecurringTransaction? @relation(fields: [recurringTransactionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, transactionType, transactionDate])
+  @@index([userId, categoryId])
 }
 
 enum LogActionType {
@@ -169,4 +192,32 @@ model Budget {
   updatedAt   DateTime @updatedAt
 
   @@unique([userId, year, month, categoryId])
+}
+
+model RecurringTransaction {
+  id                   String          @id @default(uuid())
+  userId               String
+  user                 User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactionType      TransactionType
+  amount               Decimal         @db.Decimal(18, 2)
+  description          String?
+  categoryId           String?
+  category             Category?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  sourceAccountId      String?
+  sourceAccount        Account?        @relation("SourceRecurringTransactions", fields: [sourceAccountId], references: [id], onDelete: SetNull)
+  destinationAccountId String?
+  destinationAccount   Account?        @relation("DestinationRecurringTransactions", fields: [destinationAccountId], references: [id], onDelete: SetNull)
+
+  interval    RecurringInterval
+  startDate   DateTime          @default(now())
+  endDate     DateTime?
+  nextRunDate DateTime
+
+  lastRunDate DateTime?
+  status      RecurringStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions Transaction[]
 }

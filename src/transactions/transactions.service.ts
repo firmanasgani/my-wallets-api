@@ -309,11 +309,32 @@ export class TransactionsService {
       search,
     } = query;
 
+    // 1. Check User Subscription Plan
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { subscriptionPlan: true },
+    });
+
+    let effectiveStartDate = startDate ? new Date(startDate) : undefined;
+    const isFreePlan = user?.subscriptionPlan === 'FREE';
+
+    if (isFreePlan) {
+      const twelveMonthsAgo = new Date();
+      twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
+
+      // If no start date provided, or provided start date is older than allowed limit
+      if (!effectiveStartDate || effectiveStartDate < twelveMonthsAgo) {
+        effectiveStartDate = twelveMonthsAgo;
+      }
+    }
+
     const whereClause: Prisma.TransactionWhereInput = {
       userId,
       ...(type ? { transactionType: type } : {}),
       ...(categoryId ? { categoryId } : {}),
-      ...(startDate ? { transactionDate: { gte: new Date(startDate) } } : {}),
+      ...(effectiveStartDate
+        ? { transactionDate: { gte: effectiveStartDate } }
+        : {}),
       ...(endDate ? { transactionDate: { lte: new Date(endDate) } } : {}),
       ...(search
         ? { description: { contains: search, mode: 'insensitive' } as any }
