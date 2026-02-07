@@ -11,7 +11,12 @@ import { defaultCategoryTemplates } from 'src/common/category';
 import { UsersService } from 'src/users/users.service';
 import { RegisterDto } from './dto/register.dto';
 import * as bcrypt from 'bcrypt';
-import { LogActionType, Prisma, User } from '@prisma/client';
+import {
+  LogActionType,
+  Prisma,
+  SubscriptionStatus,
+  User,
+} from '@prisma/client';
 import { LogsService } from 'src/logs/logs.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -83,6 +88,21 @@ export class AuthService {
                 });
               }
             }
+          }
+
+          const freePlan = await tx.subscriptionPlan.findUnique({
+            where: { code: 'FREE' },
+          });
+
+          if (freePlan) {
+            await tx.userSubscription.create({
+              data: {
+                userId: newUser.id,
+                subscriptionPlanId: freePlan.id,
+                status: SubscriptionStatus.ACTIVE,
+                startDate: new Date(),
+              },
+            });
           }
 
           return newUser;
@@ -476,11 +496,22 @@ export class AuthService {
     }
   }
 
-  async getProfileWithUrl(
-    userId: string,
-  ): Promise<Omit<User, 'passwordHash'> & { profilePictureUrl?: string }> {
+  async getProfileWithUrl(userId: string): Promise<
+    Omit<User, 'passwordHash'> & {
+      profilePictureUrl?: string;
+      activeSubscription?: any;
+      subscriptionPlan?: string;
+    }
+  > {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
+      include: {
+        subscriptions: {
+          where: { status: SubscriptionStatus.ACTIVE },
+          include: { plan: true },
+          take: 1,
+        },
+      },
     });
 
     if (!user) {
@@ -501,9 +532,31 @@ export class AuthService {
       }
     }
 
+    const activeSubscription = user.subscriptions[0];
+    let daysRemaining: number | null = null;
+    if (activeSubscription?.endDate) {
+      const diff =
+        new Date(activeSubscription.endDate).getTime() - new Date().getTime();
+      daysRemaining = Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+    }
+
+    const displayPlan = activeSubscription?.plan.code?.startsWith('PREMIUM')
+      ? 'PREMIUM'
+      : 'FREE';
+
     return {
       ...userWithoutPassword,
       ...(profilePictureUrl && { profilePictureUrl }),
-    } as Omit<User, 'passwordHash'> & { profilePictureUrl?: string };
+      subscriptionPlan: displayPlan,
+      activeSubscription: activeSubscription
+        ? {
+            planName: activeSubscription.plan.name,
+            planCode: activeSubscription.plan.code,
+            startDate: activeSubscription.startDate,
+            endDate: activeSubscription.endDate,
+            daysRemaining,
+          }
+        : null,
+    };
   }
 }

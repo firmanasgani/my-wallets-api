@@ -4,7 +4,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { TransactionType } from '@prisma/client';
+import { Prisma, SubscriptionStatus, TransactionType } from '@prisma/client';
 
 @Injectable()
 export class ReportsService {
@@ -14,9 +14,20 @@ export class ReportsService {
   private async ensurePremium(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { subscriptionPlan: true },
+      include: {
+        subscriptions: {
+          where: { status: SubscriptionStatus.ACTIVE },
+          include: { plan: true },
+          take: 1,
+        },
+      },
     });
-    if (!user || user.subscriptionPlan === 'FREE') {
+
+    const activeSubscription = user?.subscriptions[0];
+    const isFree =
+      !activeSubscription || activeSubscription.plan.code === 'FREE';
+
+    if (isFree) {
       throw new ForbiddenException(
         'Upgrade to Premium to access detailed reports.',
       );

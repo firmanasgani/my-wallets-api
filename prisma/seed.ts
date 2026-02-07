@@ -1,9 +1,9 @@
-import { Logger } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, SubscriptionStatus } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 const prisma = new PrismaClient();
 
 async function main() {
-  Logger.log(`Start Seeding ...`);
+  console.log(`Start Seeding ...`);
 
   const banksData = [
     {
@@ -252,7 +252,115 @@ async function main() {
     });
   }
 
-  Logger.log('Seeding completed.');
+  // --- Subscription Plans ---
+  const plans = [
+    {
+      name: 'Free Plan',
+      code: 'FREE',
+      description: 'Default free plan',
+      price: 0,
+      discountPrice: 0,
+      durationMonths: null,
+    },
+    {
+      name: 'Premium 1 Month',
+      code: 'PREMIUM_1M',
+      description: 'Premium access for 1 month',
+      price: 39000,
+      discountPrice: 35000,
+      durationMonths: 1,
+    },
+    {
+      name: 'Premium 6 Months',
+      code: 'PREMIUM_6M',
+      description: 'Premium access for 6 months',
+      price: 199000,
+      discountPrice: 175000,
+      durationMonths: 6,
+    },
+    {
+      name: 'Premium 1 Year',
+      code: 'PREMIUM_1Y',
+      description: 'Premium access for 1 year',
+      price: 299000,
+      discountPrice: 250000,
+      durationMonths: 12,
+    },
+  ];
+
+  const seededPlans: any[] = [];
+  for (const plan of plans) {
+    const p = await prisma.subscriptionPlan.upsert({
+      where: { code: plan.code },
+      update: plan,
+      create: plan,
+    });
+    seededPlans.push(p);
+  }
+
+  // --- Users ---
+  const saltRounds = 10;
+  const defaultPassword = 'MyWallets123';
+  const hashedPassword = await bcrypt.hash(defaultPassword, saltRounds);
+
+  const users = [
+    {
+      username: 'freeuser',
+      email: 'free@example.com',
+      passwordHash: hashedPassword,
+      fullName: 'Free User',
+    },
+    {
+      username: 'premiumuser',
+      email: 'premium@example.com',
+      passwordHash: hashedPassword,
+      fullName: 'Premium User',
+    },
+  ];
+
+  for (const userData of users) {
+    const user = await prisma.user.upsert({
+      where: { email: userData.email },
+      update: {},
+      create: userData,
+    });
+
+    // Assign subscription
+    const planCode =
+      userData.username === 'premiumuser' ? 'PREMIUM_1M' : 'FREE';
+    const plan = seededPlans.find((p) => p.code === planCode);
+
+    if (plan) {
+      const now = new Date();
+      let endDate: Date | null = null;
+      if (plan.durationMonths) {
+        endDate = new Date();
+        endDate.setMonth(now.getMonth() + plan.durationMonths);
+      }
+
+      // Check if user already has an active subscription
+      const existingSub = await prisma.userSubscription.findFirst({
+        where: {
+          userId: user.id,
+          status: SubscriptionStatus.ACTIVE,
+        },
+      });
+
+      if (!existingSub) {
+        await prisma.userSubscription.create({
+          data: {
+            userId: user.id,
+            subscriptionPlanId: plan.id,
+            startDate: now,
+            endDate: endDate,
+            status: SubscriptionStatus.ACTIVE,
+          },
+        });
+      }
+    }
+  }
+
+  console.log('Seeding completed.');
 }
 
 main()

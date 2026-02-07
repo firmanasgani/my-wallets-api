@@ -6,7 +6,12 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateAccountDto } from './dto/create-account.dto';
-import { AccountType, LogActionType, Prisma } from '@prisma/client';
+import {
+  AccountType,
+  LogActionType,
+  Prisma,
+  SubscriptionStatus,
+} from '@prisma/client';
 import { UpdateAccountDto } from './dto/update-account.dto';
 import { LogsService } from 'src/logs/logs.service';
 import { use } from 'passport';
@@ -33,10 +38,23 @@ export class AccountsService {
     } = createAccountDto;
     let resolvedBankId: string | null = null;
 
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        subscriptions: {
+          where: { status: SubscriptionStatus.ACTIVE },
+          include: { plan: true },
+          take: 1,
+        },
+      },
+    });
     if (!user) throw new BadRequestException('User not found');
 
-    if (user.subscriptionPlan === 'FREE') {
+    const activeSubscription = user.subscriptions[0];
+    const isFreePlan =
+      !activeSubscription || activeSubscription.plan.code === 'FREE';
+
+    if (isFreePlan) {
       const accountCount = await this.prisma.account.count({
         where: { userId },
       });

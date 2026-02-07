@@ -29,13 +29,42 @@ model User {
   recurringTransactions RecurringTransaction[]
   logs                  Log[]
   budgets               Budget[]
-  subscriptionPlan      SubscriptionPlan       @default(FREE)
+  subscriptions         UserSubscription[]
 }
 
-enum SubscriptionPlan {
-  FREE
-  PREMIUM
-  FAMILY
+model SubscriptionPlan {
+  id             String   @id @default(uuid())
+  name           String   @unique
+  code           String   @unique // FREE, PREMIUM_1M, PREMIUM_6M, PREMIUM_1Y
+  description    String?
+  price          Decimal  @db.Decimal(18, 2)
+  discountPrice  Decimal? @db.Decimal(18, 2)
+  durationMonths Int? // Number of months
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  userSubscriptions UserSubscription[]
+}
+
+model UserSubscription {
+  id                 String             @id @default(uuid())
+  userId             String
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscriptionPlanId String
+  plan               SubscriptionPlan   @relation(fields: [subscriptionPlanId], references: [id])
+  startDate          DateTime           @default(now())
+  endDate            DateTime?
+  status             SubscriptionStatus @default(ACTIVE)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@index([userId, status])
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
 }
 
 enum AccountType {
@@ -139,6 +168,7 @@ model Transaction {
 
   recurringTransactionId String?
   recurringTransaction   RecurringTransaction? @relation(fields: [recurringTransactionId], references: [id], onDelete: SetNull)
+  attachmentPath         String?
 
   @@index([userId, transactionType, transactionDate])
   @@index([userId, categoryId])

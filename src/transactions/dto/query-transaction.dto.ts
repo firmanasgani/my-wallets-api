@@ -58,4 +58,12 @@ export class QueryTransactionDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @IsOptional()
+  @IsString()
+  accountName?: string;
+
+  @IsOptional()
+  @IsString()
+  categoryName?: string;
 }

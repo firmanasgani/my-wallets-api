@@ -7,7 +7,13 @@ import {
 import { LogsService } from 'src/logs/logs.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
-import { Category, CategoryType, LogActionType, Prisma } from '@prisma/client';
+import {
+  Category,
+  CategoryType,
+  LogActionType,
+  Prisma,
+  SubscriptionStatus,
+} from '@prisma/client';
 import { QueryCategoryDto } from './dto/query-category.dto';
 import { UpdateCategoryDto } from './dto/update-catetogry.dto';
 
@@ -26,10 +32,23 @@ export class CategoriesService {
   ): Promise<Category> {
     const { name, type, parentId, icon, color } = createCategoryDto;
 
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        subscriptions: {
+          where: { status: SubscriptionStatus.ACTIVE },
+          include: { plan: true },
+          take: 1,
+        },
+      },
+    });
     if (!user) throw new BadRequestException('User not found');
 
-    if (user.subscriptionPlan === 'FREE') {
+    const activeSubscription = user.subscriptions[0];
+    const isFreePlan =
+      !activeSubscription || activeSubscription.plan.code === 'FREE';
+
+    if (isFreePlan) {
       if (!parentId) {
         // Parent Category Limit
         const parentCount = await this.prisma.category.count({

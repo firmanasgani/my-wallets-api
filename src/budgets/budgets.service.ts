@@ -7,7 +7,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { SubscriptionPlan } from '@prisma/client';
+import { SubscriptionStatus } from '@prisma/client';
 import { CreateBudgetDto } from './dto/create-budget.dto';
 import { BudgetFilterDto } from './dto/budget-filter.dto';
 import { UpdateBudgetDto } from './dto/update-budget.dto'; // Need to create this too
@@ -22,9 +22,20 @@ export class BudgetsService {
     // Check user subscription plan and budget limit
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
+      include: {
+        subscriptions: {
+          where: { status: SubscriptionStatus.ACTIVE },
+          include: { plan: true },
+          take: 1,
+        },
+      },
     });
 
-    if (user && user.subscriptionPlan === SubscriptionPlan.FREE) {
+    const activeSubscription = user?.subscriptions[0];
+    const isFreePlan =
+      !activeSubscription || activeSubscription.plan.code === 'FREE';
+
+    if (isFreePlan) {
       const budgetCount = await this.prisma.budget.count({
         where: { userId },
       });

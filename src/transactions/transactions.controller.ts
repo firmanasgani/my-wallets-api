@@ -12,7 +12,13 @@ import {
   ParseUUIDPipe,
   Delete,
   Patch,
+  UseInterceptors,
+  UploadedFile,
+  ParseFilePipe,
+  MaxFileSizeValidator,
+  FileTypeValidator,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { TransactionsService } from './transactions.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GetUser } from '../common/decorators/get-user.decorator';
@@ -30,45 +36,81 @@ export class TransactionsController {
   constructor(private readonly transactionsService: TransactionsService) {}
 
   @Post('income')
+  @UseInterceptors(FileInterceptor('attachment'))
   @HttpCode(HttpStatus.CREATED)
   createIncome(
     @GetUser() user: UserModel,
     @Body() createIncomeDto: CreateIncomeDto,
     @Req() req: Request,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
+          new FileTypeValidator({ fileType: '.(png|jpeg|jpg|pdf)' }),
+        ],
+        fileIsRequired: false,
+      }),
+    )
+    file?: Express.Multer.File,
   ) {
     return this.transactionsService.createIncome(
       user.id,
       createIncomeDto,
+      file,
       req.ip,
       req.headers['user-agent'],
     );
   }
 
   @Post('expense')
+  @UseInterceptors(FileInterceptor('attachment'))
   @HttpCode(HttpStatus.CREATED)
   createExpense(
     @GetUser() user: UserModel,
     @Body() createExpenseDto: CreateExpenseDto,
     @Req() req: Request,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
+          new FileTypeValidator({ fileType: '.(png|jpeg|jpg|pdf)' }),
+        ],
+        fileIsRequired: false,
+      }),
+    )
+    file?: Express.Multer.File,
   ) {
     return this.transactionsService.createExpense(
       user.id,
       createExpenseDto,
+      file,
       req.ip,
       req.headers['user-agent'],
     );
   }
 
   @Post('transfer')
+  @UseInterceptors(FileInterceptor('attachment'))
   @HttpCode(HttpStatus.CREATED)
   createTransfer(
     @GetUser() user: UserModel,
     @Body() createTransferDto: CreateTransferDto,
     @Req() req: Request,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
+          new FileTypeValidator({ fileType: '.(png|jpeg|jpg|pdf)' }),
+        ],
+        fileIsRequired: false,
+      }),
+    )
+    file?: Express.Multer.File,
   ) {
     return this.transactionsService.createTransfer(
       user.id,
       createTransferDto,
+      file,
       req.ip,
       req.headers['user-agent'],
     );

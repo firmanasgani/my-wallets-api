@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { LogsService } from 'src/logs/logs.service';
+import { MinioService } from 'src/common/minio/minio.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateIncomeDto } from './dto/create-income.dto';
 import {
@@ -14,6 +15,7 @@ import {
   LogActionType,
   Prisma,
   TransactionType,
+  SubscriptionStatus,
 } from '@prisma/client';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { CreateTransferDto } from './dto/create-transfer.dto';
@@ -25,11 +27,13 @@ export class TransactionsService {
   constructor(
     private prisma: PrismaService,
     private logsService: LogsService,
+    private minioService: MinioService,
   ) {}
 
   async createIncome(
     userId: string,
     dto: CreateIncomeDto,
+    file?: Express.Multer.File,
     ipAddress?: string,
     userAgent?: string,
   ) {
@@ -40,6 +44,8 @@ export class TransactionsService {
       transactionDate,
       description,
     } = dto;
+
+    const attachmentPath = await this.handleFileUpload(userId, file);
 
     const destinationAccount = await this.prisma.account.findFirst({
       where: { id: destinationAccountId, userId },
@@ -78,6 +84,7 @@ export class TransactionsService {
             sourceAccountid: null,
             categoryId,
             userId,
+            attachmentPath,
           },
           include: {
             category: true,
@@ -120,6 +127,7 @@ export class TransactionsService {
   async createExpense(
     userId: string,
     dto: CreateExpenseDto,
+    file?: Express.Multer.File,
     ipAddress?: string,
     userAgent?: string,
   ) {
@@ -130,6 +138,8 @@ export class TransactionsService {
       transactionDate,
       description,
     } = dto;
+
+    const attachmentPath = await this.handleFileUpload(userId, file);
 
     const sourceAccount = await this.prisma.account.findFirst({
       where: { id: sourceAccountId, userId },
@@ -166,6 +176,7 @@ export class TransactionsService {
             sourceAccountid: sourceAccountId,
             categoryId,
             userId,
+            attachmentPath,
           },
           include: {
             category: true,
@@ -208,6 +219,7 @@ export class TransactionsService {
   async createTransfer(
     userId: string,
     dto: CreateTransferDto,
+    file?: Express.Multer.File,
     ipAddress?: string,
     userAgent?: string,
   ) {
@@ -245,6 +257,8 @@ export class TransactionsService {
         throw new ForbiddenException('Category not found or access Denied');
     }
 
+    const attachmentPath = await this.handleFileUpload(userId, file);
+
     try {
       const result = await this.prisma.$transaction(async (tx) => {
         await tx.account.update({
@@ -273,6 +287,7 @@ export class TransactionsService {
             sourceAccountid: sourceAccountId,
             categoryId: categoryId || null,
             userId,
+            attachmentPath,
           },
           include: {
             destinationAccount: {
@@ -327,16 +342,26 @@ export class TransactionsService {
       sortBy = 'transactionDate',
       sortOrder = 'desc',
       search,
+      accountName,
+      categoryName,
     } = query;
 
     // 1. Check User Subscription Plan
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { subscriptionPlan: true },
+      include: {
+        subscriptions: {
+          where: { status: SubscriptionStatus.ACTIVE },
+          include: { plan: true },
+          take: 1,
+        },
+      },
     });
 
     let effectiveStartDate = startDate ? new Date(startDate) : undefined;
-    const isFreePlan = user?.subscriptionPlan === 'FREE';
+    const activeSubscription = user?.subscriptions[0];
+    const isFreePlan =
+      !activeSubscription || activeSubscription.plan.code === 'FREE';
 
     if (isFreePlan) {
       const twelveMonthsAgo = new Date();
@@ -348,25 +373,93 @@ export class TransactionsService {
       }
     }
 
+    const andConditions: Prisma.TransactionWhereInput[] = [{ userId }];
+
+    if (type) {
+      andConditions.push({ transactionType: type });
+    }
+
+    if (categoryId) {
+      andConditions.push({ categoryId });
+    }
+
+    if (effectiveStartDate) {
+      andConditions.push({ transactionDate: { gte: effectiveStartDate } });
+    }
+
+    if (endDate) {
+      andConditions.push({ transactionDate: { lte: new Date(endDate) } });
+    }
+
+    if (accountId) {
+      andConditions.push({
+        OR: [
+          { sourceAccountid: accountId },
+          { destinationAccountId: accountId },
+        ],
+      });
+    }
+
+    if (accountName) {
+      andConditions.push({
+        OR: [
+          {
+            sourceAccount: {
+              accountName: { contains: accountName, mode: 'insensitive' },
+            },
+          },
+          {
+            destinationAccount: {
+              accountName: { contains: accountName, mode: 'insensitive' },
+            },
+          },
+        ],
+      });
+    }
+
+    if (categoryName) {
+      andConditions.push({
+        category: {
+          categoryName: { contains: categoryName, mode: 'insensitive' },
+        },
+      });
+    }
+
+    if (search) {
+      const searchConditions: Prisma.TransactionWhereInput[] = [
+        { description: { contains: search, mode: 'insensitive' } },
+        {
+          category: {
+            categoryName: { contains: search, mode: 'insensitive' },
+          },
+        },
+        {
+          sourceAccount: {
+            accountName: { contains: search, mode: 'insensitive' },
+          },
+        },
+        {
+          destinationAccount: {
+            accountName: { contains: search, mode: 'insensitive' },
+          },
+        },
+      ];
+
+      // Check if search term matches a transaction type enum
+      const searchUpper = search.toUpperCase();
+      if (
+        Object.values(TransactionType).includes(searchUpper as TransactionType)
+      ) {
+        searchConditions.push({
+          transactionType: searchUpper as TransactionType,
+        });
+      }
+
+      andConditions.push({ OR: searchConditions });
+    }
+
     const whereClause: Prisma.TransactionWhereInput = {
-      userId,
-      ...(type ? { transactionType: type } : {}),
-      ...(categoryId ? { categoryId } : {}),
-      ...(effectiveStartDate
-        ? { transactionDate: { gte: effectiveStartDate } }
-        : {}),
-      ...(endDate ? { transactionDate: { lte: new Date(endDate) } } : {}),
-      ...(search
-        ? { description: { contains: search, mode: 'insensitive' } as any }
-        : {}),
-      ...(accountId
-        ? {
-            OR: [
-              { sourceAccountid: accountId },
-              { destinationAccountId: accountId },
-            ],
-          }
-        : {}),
+      AND: andConditions,
     };
 
     const transactions = await this.prisma.transaction.findMany({
@@ -397,8 +490,17 @@ export class TransactionsService {
 
     const total = await this.prisma.transaction.count({ where: whereClause });
 
+    const dataWithUrls = await Promise.all(
+      transactions.map(async (t) => ({
+        ...t,
+        attachmentUrl: t.attachmentPath
+          ? await this.minioService.getFileUrl(t.attachmentPath)
+          : null,
+      })),
+    );
+
     return {
-      data: transactions,
+      data: dataWithUrls,
       meta: {
         total,
         page,
@@ -447,7 +549,13 @@ export class TransactionsService {
 
     if (!transaction)
       throw new ForbiddenException('Transaction not found or access Denied');
-    return transaction;
+
+    return {
+      ...transaction,
+      attachmentUrl: transaction.attachmentPath
+        ? await this.minioService.getFileUrl(transaction.attachmentPath)
+        : null,
+    };
   }
 
   async remove(
@@ -720,5 +828,16 @@ export class TransactionsService {
     });
 
     return updatedTransaction;
+  }
+
+  private async handleFileUpload(
+    userId: string,
+    file?: Express.Multer.File,
+  ): Promise<string | null> {
+    if (!file) return null;
+
+    const ext = file.originalname.split('.').pop();
+    const fileName = `attachment-transactions/${userId}/${Date.now()}-${Math.round(Math.random() * 1e9)}.${ext}`;
+    return await this.minioService.uploadFile(file, fileName);
   }
 }
