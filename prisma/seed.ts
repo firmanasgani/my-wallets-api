@@ -298,67 +298,67 @@ async function main() {
     seededPlans.push(p);
   }
 
-  // --- Users ---
-  const saltRounds = 10;
-  const defaultPassword = 'MyWallets123';
-  const hashedPassword = await bcrypt.hash(defaultPassword, saltRounds);
+  // // --- Users ---
+  // const saltRounds = 10;
+  // const defaultPassword = 'MyWallets123';
+  // const hashedPassword = await bcrypt.hash(defaultPassword, saltRounds);
 
-  const users = [
-    {
-      username: 'freeuser',
-      email: 'free@example.com',
-      passwordHash: hashedPassword,
-      fullName: 'Free User',
-    },
-    {
-      username: 'premiumuser',
-      email: 'premium@example.com',
-      passwordHash: hashedPassword,
-      fullName: 'Premium User',
-    },
-  ];
+  // const users = [
+  //   {
+  //     username: 'freeuser',
+  //     email: 'free@example.com',
+  //     passwordHash: hashedPassword,
+  //     fullName: 'Free User',
+  //   },
+  //   {
+  //     username: 'premiumuser',
+  //     email: 'premium@example.com',
+  //     passwordHash: hashedPassword,
+  //     fullName: 'Premium User',
+  //   },
+  // ];
 
-  for (const userData of users) {
-    const user = await prisma.user.upsert({
-      where: { email: userData.email },
-      update: {},
-      create: userData,
-    });
+  // for (const userData of users) {
+  //   const user = await prisma.user.upsert({
+  //     where: { email: userData.email },
+  //     update: {},
+  //     create: userData,
+  //   });
 
-    // Assign subscription
-    const planCode =
-      userData.username === 'premiumuser' ? 'PREMIUM_1M' : 'FREE';
-    const plan = seededPlans.find((p) => p.code === planCode);
+  //   // Assign subscription
+  //   const planCode =
+  //     userData.username === 'premiumuser' ? 'PREMIUM_1M' : 'FREE';
+  //   const plan = seededPlans.find((p) => p.code === planCode);
 
-    if (plan) {
-      const now = new Date();
-      let endDate: Date | null = null;
-      if (plan.durationMonths) {
-        endDate = new Date();
-        endDate.setMonth(now.getMonth() + plan.durationMonths);
-      }
+  //   if (plan) {
+  //     const now = new Date();
+  //     let endDate: Date | null = null;
+  //     if (plan.durationMonths) {
+  //       endDate = new Date();
+  //       endDate.setMonth(now.getMonth() + plan.durationMonths);
+  //     }
 
-      // Check if user already has an active subscription
-      const existingSub = await prisma.userSubscription.findFirst({
-        where: {
-          userId: user.id,
-          status: SubscriptionStatus.ACTIVE,
-        },
-      });
+  //     // Check if user already has an active subscription
+  //     const existingSub = await prisma.userSubscription.findFirst({
+  //       where: {
+  //         userId: user.id,
+  //         status: SubscriptionStatus.ACTIVE,
+  //       },
+  //     });
 
-      if (!existingSub) {
-        await prisma.userSubscription.create({
-          data: {
-            userId: user.id,
-            subscriptionPlanId: plan.id,
-            startDate: now,
-            endDate: endDate,
-            status: SubscriptionStatus.ACTIVE,
-          },
-        });
-      }
-    }
-  }
+  //     if (!existingSub) {
+  //       await prisma.userSubscription.create({
+  //         data: {
+  //           userId: user.id,
+  //           subscriptionPlanId: plan.id,
+  //           startDate: now,
+  //           endDate: endDate,
+  //           status: SubscriptionStatus.ACTIVE,
+  //         },
+  //       });
+  //     }
+  //   }
+  // }
 
   console.log('Seeding completed.');
 }
