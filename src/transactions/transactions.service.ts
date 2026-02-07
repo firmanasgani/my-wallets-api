@@ -59,6 +59,13 @@ export class TransactionsService {
 
     try {
       const result = await this.prisma.$transaction(async (tx) => {
+        await tx.account.update({
+          where: { id: destinationAccountId },
+          data: {
+            currentBalance: { increment: amount },
+          },
+        });
+
         const transaction = await tx.transaction.create({
           data: {
             amount,
@@ -80,12 +87,6 @@ export class TransactionsService {
           },
         });
 
-        await tx.account.update({
-          where: { id: destinationAccountId },
-          data: {
-            currentBalance: { increment: amount },
-          },
-        });
         return transaction;
       });
 
@@ -106,6 +107,8 @@ export class TransactionsService {
         userAgent,
         description: `User created income transaction ${result.id} to ${result.destinationAccount?.accountName} for ${result.amount}`,
       });
+
+      return result;
     } catch (error) {
       Logger.error(error);
       throw new InternalServerErrorException(
@@ -144,6 +147,13 @@ export class TransactionsService {
 
     try {
       const result = await this.prisma.$transaction(async (tx) => {
+        await tx.account.update({
+          where: { id: sourceAccountId },
+          data: {
+            currentBalance: { decrement: amount },
+          },
+        });
+
         const transaction = await tx.transaction.create({
           data: {
             amount,
@@ -165,12 +175,6 @@ export class TransactionsService {
           },
         });
 
-        await tx.account.update({
-          where: { id: sourceAccountId },
-          data: {
-            currentBalance: { decrement: amount },
-          },
-        });
         return transaction;
       });
 
@@ -191,6 +195,8 @@ export class TransactionsService {
         userAgent,
         description: `User created expense transaction ${result.id} from ${result.sourceAccount?.accountName} for ${result.amount}`,
       });
+
+      return result;
     } catch (error) {
       Logger.error(error);
       throw new InternalServerErrorException(
@@ -208,6 +214,7 @@ export class TransactionsService {
     const {
       sourceAccountId,
       destinationAccountId,
+      categoryId,
       amount,
       transactionDate,
       description,
@@ -229,31 +236,17 @@ export class TransactionsService {
         'Destination account not found or access Denied',
       );
 
+    if (categoryId) {
+      const category = await this.prisma.category.findFirst({
+        where: { id: categoryId, userId },
+      });
+
+      if (!category)
+        throw new ForbiddenException('Category not found or access Denied');
+    }
+
     try {
       const result = await this.prisma.$transaction(async (tx) => {
-        const transaction = await tx.transaction.create({
-          data: {
-            amount,
-            transactionDate: transactionDate
-              ? new Date(transactionDate)
-              : new Date(),
-            transactionType: TransactionType.TRANSFER,
-            description,
-            destinationAccountId,
-            sourceAccountid: sourceAccountId,
-            categoryId: null,
-            userId,
-          },
-          include: {
-            destinationAccount: {
-              include: { bank: true },
-            },
-            sourceAccount: {
-              include: { bank: true },
-            },
-          },
-        });
-
         await tx.account.update({
           where: { id: sourceAccountId },
           data: {
@@ -267,6 +260,30 @@ export class TransactionsService {
             currentBalance: { increment: amount },
           },
         });
+
+        const transaction = await tx.transaction.create({
+          data: {
+            amount,
+            transactionDate: transactionDate
+              ? new Date(transactionDate)
+              : new Date(),
+            transactionType: TransactionType.TRANSFER,
+            description,
+            destinationAccountId,
+            sourceAccountid: sourceAccountId,
+            categoryId: categoryId || null,
+            userId,
+          },
+          include: {
+            destinationAccount: {
+              include: { bank: true },
+            },
+            sourceAccount: {
+              include: { bank: true },
+            },
+          },
+        });
+
         return transaction;
       });
 
@@ -283,10 +300,13 @@ export class TransactionsService {
           description: result.description,
           sourceAccountId: result.sourceAccountid,
           destinationAccountId: result.destinationAccountId,
+          categoryId: result.categoryId,
         },
         userAgent,
         description: `User created transfer transaction ${result.id} from ${result.sourceAccount?.accountName} to ${result.destinationAccount?.accountName} for ${result.amount}`,
       });
+
+      return result;
     } catch (error) {
       Logger.error(error);
       throw new InternalServerErrorException(

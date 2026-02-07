@@ -24,9 +24,9 @@ export class CreateTransferDto {
   @IsUUID('4', { message: 'Destination account Id is invalid' })
   destinationAccountId: string;
 
-  @IsNotEmpty({ message: 'Category Id cananot be empty' })
+  @IsOptional()
   @IsUUID('4', { message: 'Category Id is invalid' })
-  categoryId: string;
+  categoryId?: string;
 
   @IsOptional()
   @IsDateString({}, { message: 'Date is invalid' })
