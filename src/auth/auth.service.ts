@@ -509,6 +509,7 @@ export class AuthService {
         subscriptions: {
           where: { status: SubscriptionStatus.ACTIVE },
           include: { plan: true },
+          orderBy: { createdAt: 'desc' },
           take: 1,
         },
       },
@@ -554,6 +555,7 @@ export class AuthService {
             planCode: activeSubscription.plan.code,
             startDate: activeSubscription.startDate,
             endDate: activeSubscription.endDate,
+            expiresAt: activeSubscription.endDate,
             daysRemaining,
           }
         : null,

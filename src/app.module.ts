@@ -17,6 +17,7 @@ import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { BudgetsModule } from './budgets/budgets.module';
 import { RecurringTransactionsModule } from './recurring-transactions/recurring-transactions.module';
 import { ReportsModule } from './reports/reports.module';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 
 @Module({
   imports: [
@@ -30,7 +31,6 @@ import { ReportsModule } from './reports/reports.module';
     CategoriesModule,
     TransactionsModule,
     BanksModule,
-
     BudgetsModule,
     ThrottlerModule.forRoot([
       {
@@ -40,6 +40,7 @@ import { ReportsModule } from './reports/reports.module';
     ]),
     RecurringTransactionsModule,
     ReportsModule,
+    SubscriptionsModule,
   ],
   controllers: [AppController],
   providers: [

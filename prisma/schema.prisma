@@ -30,6 +30,7 @@ model User {
   logs                  Log[]
   budgets               Budget[]
   subscriptions         UserSubscription[]
+  paymentTransactions   PaymentTransaction[]
 }
 
 model SubscriptionPlan {
@@ -43,7 +44,8 @@ model SubscriptionPlan {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  userSubscriptions UserSubscription[]
+  userSubscriptions   UserSubscription[]
+  paymentTransactions PaymentTransaction[]
 }
 
 model UserSubscription {
@@ -191,6 +193,35 @@ enum LogActionType {
   TRANSACTION_CREATE_TRANSFER
   TRANSACTION_UPDATE
   TRANSACTION_DELETE
+  SUBSCRIPTION_CHECKOUT
+  SUBSCRIPTION_WEBHOOK
+  PAYMENT_SUCCESS
+  PAYMENT_FAILED
+}
+
+model PaymentTransaction {
+  id               String           @id @default(uuid())
+  orderId          String           @unique
+  userId           String
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId           String
+  plan             SubscriptionPlan @relation(fields: [planId], references: [id])
+  amount           Decimal          @db.Decimal(18, 2)
+  status           PaymentStatus    @default(PENDING)
+  snapToken        String?
+  midtransResponse Json?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([userId, status])
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  EXPIRED
+  CANCELLED
 }
 
 model Log {
