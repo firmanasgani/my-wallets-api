@@ -55,7 +55,6 @@ export class SubscriptionsService {
 
     const authString = Buffer.from(`${midtransServerKey}:`).toString('base64');
 
-    const apiUrl = this.configService.get<string>('API_URL');
     const payload = {
       transaction_details: {
         order_id: orderId,
@@ -73,11 +72,6 @@ export class SubscriptionsService {
           name: plan.name,
         },
       ],
-      callbacks: {
-        finish: `${apiUrl}/notification/finish`,
-        unfinish: `${apiUrl}/notification/unfinish`,
-        error: `${apiUrl}/notification/error`,
-      },
     };
 
     try {
@@ -152,7 +146,19 @@ export class SubscriptionsService {
       .update(orderId + statusCode + grossAmount + midtransServerKey)
       .digest('hex');
 
+    console.log(
+      `[Midtrans Webhook] Order: ${orderId}, Status: ${transactionStatus}`,
+    );
+    console.log(`[Midtrans Webhook] Payload Signature: ${signatureKey}`);
+    console.log(`[Midtrans Webhook] Server Signature: ${serverSignature}`);
+    console.log(
+      `[Midtrans Webhook] String to Sign: ${orderId}${statusCode}${grossAmount}${midtransServerKey}`,
+    );
+
     if (serverSignature !== signatureKey) {
+      console.error(
+        `[Midtrans Webhook] Invalid Signature! Expected ${serverSignature}, got ${signatureKey}`,
+      );
       throw new BadRequestException('Invalid signature');
     }
 
@@ -162,6 +168,9 @@ export class SubscriptionsService {
     });
 
     if (!payment) {
+      console.warn(
+        `[Midtrans Webhook] Payment not found for OrderId: ${orderId}`,
+      );
       return { status: 'OK', message: 'Payment not found' };
     }
 

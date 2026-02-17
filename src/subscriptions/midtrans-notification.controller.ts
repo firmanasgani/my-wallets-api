@@ -20,9 +20,7 @@ export class MidtransNotificationController {
   @Get('finish')
   @Redirect()
   async handleFinish(@Query() query: any) {
-    const frontendUrl =
-      this.configService.get('FRONTEND_URL') ||
-      'https://my-wallets.firmanasgani.id';
+    const frontendUrl = 'https://my-wallets.firmanasgani.id';
     return {
       url: `${frontendUrl}/payment/finish?order_id=${query.order_id}&status_code=${query.status_code}&transaction_status=${query.transaction_status}`,
     };
@@ -32,9 +30,7 @@ export class MidtransNotificationController {
   @Get('unfinish')
   @Redirect()
   async handleUnfinish(@Query() query: any) {
-    const frontendUrl =
-      this.configService.get('FRONTEND_URL') ||
-      'https://my-wallets.firmanasgani.id';
+    const frontendUrl = 'https://my-wallets.firmanasgani.id';
     return {
       url: `${frontendUrl}/payment/unfinish?order_id=${query.order_id}&status_code=${query.status_code}&transaction_status=${query.transaction_status}`,
     };
@@ -44,9 +40,7 @@ export class MidtransNotificationController {
   @Get('error')
   @Redirect()
   async handleError(@Query() query: any) {
-    const frontendUrl =
-      this.configService.get('FRONTEND_URL') ||
-      'https://my-wallets.firmanasgani.id';
+    const frontendUrl = 'https://my-wallets.firmanasgani.id';
     return {
       url: `${frontendUrl}/payment/error?order_id=${query.order_id}&status_code=${query.status_code}&transaction_status=${query.transaction_status}`,
     };
