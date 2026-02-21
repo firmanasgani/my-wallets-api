@@ -52,6 +52,12 @@ export class SubscriptionsService {
       throw new InternalServerErrorException('Midtrans Server Key not found');
     }
 
+    const isProduction =
+      this.configService.get<string>('MIDTRANS_IS_PRODUCTION') === 'true';
+    const snapUrl = isProduction
+      ? 'https://app.midtrans.com/snap/v1/transactions'
+      : 'https://app.sandbox.midtrans.com/snap/v1/transactions';
+
     const authString = Buffer.from(`${midtransServerKey}:`).toString('base64');
 
     const payload = {
@@ -74,18 +80,15 @@ export class SubscriptionsService {
     };
 
     try {
-      const response = await fetch(
-        'https://app.midtrans.com/snap/v1/transactions',
-        {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-            Authorization: `Basic ${authString}`,
-          },
-          body: JSON.stringify(payload),
+      const response = await fetch(snapUrl, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Basic ${authString}`,
         },
-      );
+        body: JSON.stringify(payload),
+      });
 
       const data = await response.json();
       if (!response.ok) {
@@ -171,6 +174,12 @@ export class SubscriptionsService {
       throw new InternalServerErrorException('Midtrans Server Key not found');
     }
 
+    const isProduction =
+      this.configService.get<string>('MIDTRANS_IS_PRODUCTION') === 'true';
+    const snapUrl = isProduction
+      ? 'https://app.midtrans.com/snap/v1/transactions'
+      : 'https://app.sandbox.midtrans.com/snap/v1/transactions';
+
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
 
@@ -197,18 +206,15 @@ export class SubscriptionsService {
     };
 
     try {
-      const response = await fetch(
-        'https://app.midtrans.com/snap/v1/transactions',
-        {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-            Authorization: `Basic ${authString}`,
-          },
-          body: JSON.stringify(snapPayload),
+      const response = await fetch(snapUrl, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Basic ${authString}`,
         },
-      );
+        body: JSON.stringify(snapPayload),
+      });
 
       const data = await response.json();
       if (!response.ok) {
