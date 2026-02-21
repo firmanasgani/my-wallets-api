@@ -12,6 +12,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateIncomeDto } from './dto/create-income.dto';
 import {
   CategoryType,
+  GoalLedgerDirection,
   LogActionType,
   Prisma,
   TransactionType,
@@ -155,6 +156,21 @@ export class TransactionsService {
     if (!category)
       throw new ForbiddenException('Category not found or access Denied');
 
+    // Cek saldo yang benar-benar tersedia setelah dikurangi alokasi ke financial goals.
+    // Ini mencegah pengeluaran yang akan "mengambil" uang yang sudah disisihkan untuk goal.
+    const allocatedToGoals = await this.getAccountAllocatedAmount(sourceAccountId);
+    const availableBalance = Number(sourceAccount.currentBalance) - allocatedToGoals;
+    if (availableBalance < Number(amount)) {
+      throw new BadRequestException(
+        `Insufficient available balance. ` +
+          `Account balance: ${Number(sourceAccount.currentBalance).toFixed(2)}, ` +
+          `allocated to goals: ${allocatedToGoals.toFixed(2)}, ` +
+          `available: ${availableBalance.toFixed(2)}, ` +
+          `requested: ${Number(amount).toFixed(2)}. ` +
+          `Release goal allocations first, or use the goal spend endpoint.`,
+      );
+    }
+
     try {
       const result = await this.prisma.$transaction(async (tx) => {
         await tx.account.update({
@@ -255,6 +271,21 @@ export class TransactionsService {
 
       if (!category)
         throw new ForbiddenException('Category not found or access Denied');
+    }
+
+    // Cek availableBalance akun sumber setelah dikurangi alokasi ke financial goals.
+    // Transfer keluar harus ikut aturan yang sama dengan expense.
+    const allocatedToGoals = await this.getAccountAllocatedAmount(sourceAccountId);
+    const availableBalance = Number(sourceAccount.currentBalance) - allocatedToGoals;
+    if (availableBalance < Number(amount)) {
+      throw new BadRequestException(
+        `Insufficient available balance. ` +
+          `Account balance: ${Number(sourceAccount.currentBalance).toFixed(2)}, ` +
+          `allocated to goals: ${allocatedToGoals.toFixed(2)}, ` +
+          `available: ${availableBalance.toFixed(2)}, ` +
+          `requested: ${Number(amount).toFixed(2)}. ` +
+          `Release goal allocations first.`,
+      );
     }
 
     const attachmentPath = await this.handleFileUpload(userId, file);
@@ -839,5 +870,21 @@ export class TransactionsService {
     const ext = file.originalname.split('.').pop();
     const fileName = `attachment-transactions/${userId}/${Date.now()}-${Math.round(Math.random() * 1e9)}.${ext}`;
     return await this.minioService.uploadFile(file, fileName);
+  }
+
+  /**
+   * Hitung total uang dari akun yang sudah dialokasikan ke financial goals (net).
+   * availableBalance = currentBalance - getAccountAllocatedAmount(accountId)
+   */
+  private async getAccountAllocatedAmount(accountId: string): Promise<number> {
+    const incoming = await this.prisma.goalLedger.aggregate({
+      where: { accountId, direction: GoalLedgerDirection.INCOMING },
+      _sum: { amount: true },
+    });
+    const outgoing = await this.prisma.goalLedger.aggregate({
+      where: { accountId, direction: GoalLedgerDirection.OUTGOING },
+      _sum: { amount: true },
+    });
+    return Number(incoming._sum.amount ?? 0) - Number(outgoing._sum.amount ?? 0);
   }
 }

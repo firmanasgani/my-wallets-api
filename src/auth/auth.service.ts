@@ -22,6 +22,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { MinioService } from 'src/common/minio/minio.service';
 import { randomUUID } from 'crypto';
+import { Multer } from 'multer';
 
 @Injectable()
 export class AuthService {
@@ -75,18 +76,20 @@ export class AuthService {
               },
             });
             if (template.subCategories && template.subCategories.length > 0) {
-              for (const subTemplate of template.subCategories) {
-                await tx.category.create({
-                  data: {
-                    categoryName: subTemplate.categoryName,
-                    categoryType: subTemplate.categoryType,
-                    userId: newUser.id,
-                    parentCategoryId: parentCategory.id,
-                    icon: subTemplate.icon,
-                    color: subTemplate.color,
-                  },
-                });
-              }
+              const subCategoryData = template.subCategories.map(
+                (subTemplate) => ({
+                  categoryName: subTemplate.categoryName,
+                  categoryType: subTemplate.categoryType,
+                  userId: newUser.id,
+                  parentCategoryId: parentCategory.id,
+                  icon: subTemplate.icon,
+                  color: subTemplate.color,
+                }),
+              );
+
+              await tx.category.createMany({
+                data: subCategoryData,
+              });
             }
           }
 
@@ -124,7 +127,8 @@ export class AuthService {
           userAgent: userAgent ?? '',
         });
       } catch (error) {
-        Logger.error('Failed to create log entry', {
+        if (error instanceof Error) {
+          Logger.error('Failed to create log entry', {
           errorMessage: error.message,
           dto: {
             userId: newUserAndCategories.id,
@@ -141,6 +145,12 @@ export class AuthService {
           },
           stack: error.stack,
         });
+        }else {
+          Logger.error('Failed to create log entry (non-error thrown)', {
+      error,
+    });
+
+        }
       }
       const { passwordHash, ...result } = newUserAndCategories;
       return result as Omit<User, 'passwordHash'>;
@@ -189,7 +199,16 @@ export class AuthService {
         userAgent: userAgent ?? '',
       });
     } catch (error) {
-      console.log(`Failed to create log entry: ${error.message}`);
+      if (error instanceof Error) {
+        Logger.error('Failed to create log entry for login', {
+          errorMessage: error.message,
+          userId: user.id,
+        });
+      } else {
+        Logger.error('Failed to create log entry for login (non-error thrown)', {
+          error,
+        });
+      }
     }
     return {
       access_token: this.jwtService.sign(payload),
@@ -254,10 +273,16 @@ export class AuthService {
           userAgent: userAgent ?? '',
         });
       } catch (error) {
-        Logger.error('Failed to create log entry for password change', {
+        if (error instanceof Error) {
+          Logger.error('Failed to create log entry for password change', {
           errorMessage: error.message,
           userId: user.id,
         });
+        } else {
+          Logger.error('Failed to create log entry for password change (non-error thrown)', {
+      error,
+    });
+        }
       }
 
       return { message: 'Password changed successfully' };
@@ -317,7 +342,24 @@ export class AuthService {
         try {
           await this.minioService.deleteFile(user.profilePicture);
         } catch (error) {
-          Logger.warn(`Failed to delete old profile picture: ${error.message}`);
+          if(error instanceof Error) {
+            Logger.warn(
+              `Failed to delete old profile picture: ${error.message}`,
+              {
+                userId,
+                oldProfilePicture: user.profilePicture,
+              },
+            );
+          } else {
+            Logger.warn(
+              `Failed to delete old profile picture (non-error thrown)`,
+              {
+                userId,
+                oldProfilePicture: user.profilePicture,
+                error,
+              },
+            );
+          }
         }
       }
 
@@ -344,10 +386,17 @@ export class AuthService {
           userAgent: userAgent ?? '',
         });
       } catch (error) {
-        Logger.error('Failed to create log entry for profile picture update', {
-          errorMessage: error.message,
-          userId,
-        });
+        if(error instanceof Error) {
+          Logger.error('Failed to create log entry for profile picture update', {
+            errorMessage: error.message,
+            userId,
+          });
+        } else {
+          Logger.error('Failed to create log entry for profile picture update (non-error thrown)', {
+            userId,
+            error,
+          });
+        }
       }
 
       // Remove password hash from response
@@ -359,9 +408,16 @@ export class AuthService {
         profilePicturePath: filePath,
       };
     } catch (error) {
-      Logger.error('Error updating profile picture', error);
+      if(error instanceof Error) {
+        Logger.error('Error updating profile picture', error);
       Logger.error(`Error details: ${error.message}`);
-      throw new BadRequestException('Failed to update profile picture');
+      } else {
+        Logger.error('Error updating profile picture (non-error thrown)', {
+          error,
+        });
+      }
+      
+        throw new BadRequestException('Failed to update profile picture');
     }
   }
 
@@ -409,13 +465,17 @@ export class AuthService {
           userAgent: userAgent ?? '',
         });
       } catch (error) {
-        Logger.error(
-          'Failed to create log entry for profile picture deletion',
-          {
+        if(error instanceof Error) {
+          Logger.error('Failed to create log entry for profile picture deletion', {
             errorMessage: error.message,
             userId,
-          },
-        );
+          });
+        } else {
+          Logger.error('Failed to create log entry for profile picture deletion (non-error thrown)', {
+            userId,
+            error,
+          });
+        }
       }
 
       return {
@@ -444,9 +504,15 @@ export class AuthService {
         try {
           await this.minioService.deleteFile(user.profilePicture);
         } catch (error) {
-          Logger.warn(
-            `Failed to delete profile picture during account deletion: ${error.message}`,
-          );
+          if(error instanceof Error) {
+            Logger.warn(
+              `Failed to delete profile picture during account deletion: ${error.message}`,
+            );
+          } else {
+            Logger.warn(
+              `Failed to delete profile picture during account deletion (non-error thrown): ${error}`,
+            );
+          }
         }
       }
 
@@ -529,7 +595,16 @@ export class AuthService {
           user.profilePicture,
         );
       } catch (error) {
-        Logger.warn(`Failed to generate profile picture URL: ${error.message}`);
+        if(error instanceof Error) {
+          Logger.error('Error generating profile picture URL', error);
+        Logger.error(`Error details: ${error.message}`);
+        } else {
+          Logger.error('Error generating profile picture URL (non-error thrown)', {
+            error,
+          });
+        }
+        
+        throw new BadRequestException('Failed to generate profile picture URL');
       }
     }
 

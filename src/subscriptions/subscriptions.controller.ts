@@ -33,6 +33,18 @@ export class SubscriptionsController {
     );
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Get('payment-history')
+  async getPaymentHistory(@Request() req) {
+    return this.subscriptionsService.getPaymentHistory(req.user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('resume-payment')
+  async resumePayment(@Body() body: { orderId: string }, @Request() req) {
+    return this.subscriptionsService.resumePayment(req.user.id, body.orderId);
+  }
+
   @Post('midtrans-webhook')
   async midtransWebhook(@Body() body: any) {
     return this.subscriptionsService.handleMidtransWebhook(body);

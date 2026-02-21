@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -31,6 +25,7 @@ model User {
   budgets               Budget[]
   subscriptions         UserSubscription[]
   paymentTransactions   PaymentTransaction[]
+  FinancialGoals         FinancialGoal[]
 }
 
 model SubscriptionPlan {
@@ -103,6 +98,7 @@ model Account {
 
   transactionsAsSource      Transaction[] @relation("SourceTransactions")
   transactionsAsDestination Transaction[] @relation("DestinationTransactions")
+  goalLedgers               GoalLedger[]
 
   recurringTransactionsAsSource      RecurringTransaction[] @relation("SourceRecurringTransactions")
   recurringTransactionsAsDestination RecurringTransaction[] @relation("DestinationRecurringTransactions")
@@ -171,6 +167,7 @@ model Transaction {
   recurringTransactionId String?
   recurringTransaction   RecurringTransaction? @relation(fields: [recurringTransactionId], references: [id], onDelete: SetNull)
   attachmentPath         String?
+  goalLedgers              GoalLedger[]
 
   @@index([userId, transactionType, transactionDate])
   @@index([userId, categoryId])
@@ -281,4 +278,57 @@ model RecurringTransaction {
   updatedAt DateTime @updatedAt
 
   transactions Transaction[]
+}
+
+model FinancialGoal {
+  id String @id @default(uuid())
+  userId String 
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name String
+  description String?
+  targetAmount Decimal @db.Decimal(18, 2)
+  startDate DateTime @default(now())
+  targetDate DateTime?
+  status GoalStatus @default(ACTIVE)
+  priority Int? // optional ranking (1 = highest priority
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ledgers GoalLedger[]
+}
+
+enum GoalStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+model GoalLedger {
+  id String @id @default(uuid())
+  goalId String
+  goal FinancialGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  accountId String
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  referenceTransactionId String?
+  referenceTransaction Transaction? @relation(fields: [referenceTransactionId], references: [id], onDelete: SetNull)
+  amount Decimal @db.Decimal(18, 2)
+  direction GoalLedgerDirection
+  type GoalLedgerType
+  note String?
+  createdAt DateTime @default(now())
+
+  @@index([goalId])
+  @@index([accountId])
+  @@index([referenceTransactionId])
+}
+
+enum GoalLedgerDirection {
+  INCOMING // Uang dialokasikan ke goal
+  OUTGOING // Uang keluar dari goal
+}
+
+enum GoalLedgerType {
+  ALLOCATE // user menyisihkan uang 
+  SPEND // Dipakai sesuai tujuan
+  RELEASE // Melepas alokasi, misal karena batal mencapai goal
+  ADJUST // Penyesuaian manual, misal karena kesalahan input atau perubahan rencana
 }

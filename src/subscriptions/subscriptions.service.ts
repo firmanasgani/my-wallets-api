@@ -127,6 +127,112 @@ export class SubscriptionsService {
     }
   }
 
+  async getPaymentHistory(userId: string) {
+    return this.prisma.paymentTransaction.findMany({
+      where: { userId },
+      include: {
+        plan: {
+          select: {
+            name: true,
+            code: true,
+            price: true,
+            durationMonths: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async resumePayment(userId: string, orderId: string) {
+    const payment = await this.prisma.paymentTransaction.findFirst({
+      where: { orderId, userId, status: PaymentStatus.PENDING },
+      include: { plan: true },
+    });
+
+    if (!payment) {
+      throw new NotFoundException(
+        'Pending payment not found for the given order ID',
+      );
+    }
+
+    // Jika snap token masih tersimpan, kembalikan langsung
+    if (payment.snapToken) {
+      return {
+        snap_token: payment.snapToken,
+        order_id: payment.orderId,
+      };
+    }
+
+    // Snap token tidak ada — buat token baru dari Midtrans
+    const midtransServerKey = this.configService.get<string>(
+      'MIDTRANS_SERVER_KEY',
+    );
+    if (!midtransServerKey) {
+      throw new InternalServerErrorException('Midtrans Server Key not found');
+    }
+
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+
+    const authString = Buffer.from(`${midtransServerKey}:`).toString('base64');
+    const amount = Number(payment.amount);
+
+    const snapPayload = {
+      transaction_details: {
+        order_id: payment.orderId,
+        gross_amount: amount,
+      },
+      customer_details: {
+        first_name: user.fullName || user.username,
+        email: user.email,
+      },
+      item_details: [
+        {
+          id: payment.plan.id,
+          price: amount,
+          quantity: 1,
+          name: payment.plan.name,
+        },
+      ],
+    };
+
+    try {
+      const response = await fetch(
+        'https://app.sandbox.midtrans.com/snap/v1/transactions',
+        {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            Authorization: `Basic ${authString}`,
+          },
+          body: JSON.stringify(snapPayload),
+        },
+      );
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error_messages?.[0] || 'Midtrans error');
+      }
+
+      await this.prisma.paymentTransaction.update({
+        where: { orderId: payment.orderId },
+        data: { snapToken: data.token },
+      });
+
+      return {
+        snap_token: data.token,
+        order_id: payment.orderId,
+      };
+    } catch (error) {
+      console.error('Resume Payment Error:', error);
+      throw new InternalServerErrorException(
+        error.message || 'Failed to resume payment',
+      );
+    }
+  }
+
   async handleMidtransWebhook(payload: any) {
     const {
       order_id: orderId,
