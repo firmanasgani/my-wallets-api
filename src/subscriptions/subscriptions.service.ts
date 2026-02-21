@@ -2,7 +2,6 @@ import {
   Injectable,
   NotFoundException,
   InternalServerErrorException,
-  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
@@ -261,11 +260,16 @@ export class SubscriptionsService {
       `[Midtrans Webhook] String to Sign: ${orderId}${statusCode}${grossAmount}${midtransServerKey}`,
     );
 
+    if (!signatureKey) {
+      console.log('[Midtrans Webhook] No signature key — treating as test ping, skipping processing.');
+      return { status: 'OK' };
+    }
+
     if (serverSignature !== signatureKey) {
-      console.error(
+      console.warn(
         `[Midtrans Webhook] Invalid Signature! Expected ${serverSignature}, got ${signatureKey}`,
       );
-      throw new BadRequestException('Invalid signature');
+      return { status: 'OK' };
     }
 
     const payment = await this.prisma.paymentTransaction.findUnique({
@@ -396,9 +400,14 @@ export class SubscriptionsService {
 
     console.log(`[Recurring Notification] Order: ${orderId}, Status: ${transactionStatus}`);
 
+    if (!signatureKey) {
+      console.log(`[Recurring Notification] No signature key — treating as test ping, skipping processing.`);
+      return { status: 'OK' };
+    }
+
     if (serverSignature !== signatureKey) {
-      console.error(`[Recurring Notification] Invalid signature for orderId: ${orderId}`);
-      throw new BadRequestException('Invalid signature');
+      console.warn(`[Recurring Notification] Invalid signature for orderId: ${orderId}`);
+      return { status: 'OK' };
     }
 
     // Determine success/failure
