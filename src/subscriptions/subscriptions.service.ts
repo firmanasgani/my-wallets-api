@@ -1,8 +1,10 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   InternalServerErrorException,
 } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { LogsService } from '../logs/logs.service';
@@ -15,6 +17,8 @@ import * as crypto from 'crypto';
 
 @Injectable()
 export class SubscriptionsService {
+  private readonly logger = new Logger(SubscriptionsService.name);
+
   constructor(
     private prisma: PrismaService,
     private configService: ConfigService,
@@ -116,6 +120,19 @@ export class SubscriptionsService {
         description: `User initiated checkout for ${plan.name}`,
         details: { orderId, planCode, amount },
       });
+
+      // Log ke Google Sheets (fire-and-forget, tidak memblokir response)
+      this.logCheckoutToSheets({
+        userId,
+        email: user.email,
+        fullName: user.fullName || user.username,
+        planCode,
+        planName: plan.name,
+        amount,
+        orderId,
+      }).catch((err) =>
+        this.logger.warn(`[GoogleSheets] Failed to log checkout: ${err.message}`),
+      );
 
       return {
         snap_token: data.token,
@@ -639,5 +656,110 @@ export class SubscriptionsService {
     }
 
     return { status: 'OK' };
+  }
+
+  private async logCheckoutToSheets(data: {
+    userId: string;
+    email: string;
+    fullName: string;
+    planCode: string;
+    planName: string;
+    amount: number;
+    orderId: string;
+  }) {
+    const webhookUrl = this.configService.get<string>('GOOGLE_SHEETS_WEBHOOK_URL');
+    if (!webhookUrl) return;
+
+    await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  }
+
+  @Cron('0 1 * * *')
+  async expirePendingPayments() {
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    this.logger.log(`[ExpirePendingPayments] Marking PENDING payments older than ${oneDayAgo.toISOString()} as FAILED.`);
+
+    const stale = await this.prisma.paymentTransaction.findMany({
+      where: {
+        status: PaymentStatus.PENDING,
+        createdAt: { lt: oneDayAgo },
+      },
+      select: { id: true, userId: true, orderId: true },
+    });
+
+    if (stale.length === 0) {
+      this.logger.log('[ExpirePendingPayments] No stale pending payments found.');
+      return;
+    }
+
+    const ids = stale.map((p) => p.id);
+
+    await this.prisma.paymentTransaction.updateMany({
+      where: { id: { in: ids } },
+      data: { status: PaymentStatus.FAILED },
+    });
+
+    await this.prisma.log.createMany({
+      data: stale.map((p) => ({
+        userId: p.userId,
+        actionType: LogActionType.PAYMENT_FAILED,
+        entityType: 'PaymentTransaction',
+        entityId: p.id,
+        description: `Payment ${p.orderId} auto-failed: still PENDING after 24 hours.`,
+        details: { orderId: p.orderId },
+      })),
+    });
+
+    this.logger.log(`[ExpirePendingPayments] Marked ${ids.length} payment(s) as FAILED: ${ids.join(', ')}`);
+  }
+
+  @Cron('0 1 * * *')
+  async expireSubscriptions() {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfYesterday = new Date(startOfToday);
+    startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+
+    this.logger.log(`[ExpireSubscriptions] Running at ${now.toISOString()}. Checking endDate in range [${startOfYesterday.toISOString()}, ${startOfToday.toISOString()})`);
+
+    const expired = await this.prisma.userSubscription.findMany({
+      where: {
+        status: SubscriptionStatus.ACTIVE,
+        endDate: {
+          gte: startOfYesterday,
+          lt: startOfToday,
+        },
+      },
+      select: { id: true, userId: true },
+    });
+
+    if (expired.length === 0) {
+      this.logger.log('[ExpireSubscriptions] No subscriptions to expire.');
+      return;
+    }
+
+    const ids = expired.map((s) => s.id);
+
+    await this.prisma.userSubscription.updateMany({
+      where: { id: { in: ids } },
+      data: { status: SubscriptionStatus.EXPIRED },
+    });
+
+    await this.prisma.log.createMany({
+      data: expired.map((s) => ({
+        userId: s.userId,
+        actionType: LogActionType.SUBSCRIPTION_WEBHOOK,
+        entityType: 'UserSubscription',
+        entityId: s.id,
+        description: 'Subscription expired automatically via scheduled job.',
+        details: {},
+      })),
+    });
+
+    this.logger.log(`[ExpireSubscriptions] Expired ${ids.length} subscription(s): ${ids.join(', ')}`);
   }
 }
