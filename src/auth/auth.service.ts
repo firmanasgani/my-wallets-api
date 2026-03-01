@@ -23,6 +23,10 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { MinioService } from 'src/common/minio/minio.service';
 import { randomUUID } from 'crypto';
 import { Multer } from 'multer';
+import { Resend } from 'resend';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 @Injectable()
 export class AuthService {
@@ -635,5 +639,220 @@ export class AuthService {
           }
         : null,
     };
+  }
+
+  async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {
+    const { email } = forgotPasswordDto;
+    const user = await this.prisma.user.findUnique({ where: { email } });
+
+    if (!user) {
+      // Don't leak user existence
+      return { message: 'If the email is registered, an OTP has been sent.' };
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expires = new Date();
+    expires.setMinutes(expires.getMinutes() + 5); // 5 minutes expiry
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        resetPasswordOtp: otp,
+        resetPasswordOtpExpires: expires,
+      },
+    });
+
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    const fromAddress = (process.env.SMTP_FROM || 'Moneytory <noreply@moneytory.com>').replace(/^["']|["']$/g, '');
+
+    try {
+      const { error } = await resend.emails.send({
+        from: fromAddress,
+        to: user.email,
+        subject: 'Password Reset OTP - Moneytory',
+        text: `Your OTP for password reset is: ${otp}. It will expire in 5 minutes.`,
+        html: `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Password Reset OTP</title>
+            <style>
+              body {
+                font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+                background-color: #f8fafc;
+                margin: 0;
+                padding: 0;
+                color: #334155;
+              }
+              .container {
+                max-width: 600px;
+                margin: 0 auto;
+                background-color: #ffffff;
+                border-radius: 12px;
+                overflow: hidden;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+                margin-top: 40px;
+                margin-bottom: 40px;
+              }
+              .header {
+                background-color: #1d4ed8;
+                padding: 30px 20px;
+                text-align: center;
+              }
+              .logo-text {
+                color: #ffffff;
+                font-size: 24px;
+                font-weight: 700;
+                letter-spacing: 1px;
+                margin: 0;
+              }
+              .content {
+                padding: 40px 30px;
+                text-align: center;
+              }
+              .title {
+                font-size: 20px;
+                font-weight: 600;
+                color: #0f172a;
+                margin-top: 0;
+                margin-bottom: 16px;
+              }
+              .message {
+                font-size: 15px;
+                line-height: 1.6;
+                color: #475569;
+                margin-bottom: 30px;
+              }
+              .otp-container {
+                background-color: #eff6ff;
+                border: 1px solid #bfdbfe;
+                border-radius: 8px;
+                padding: 24px;
+                margin-bottom: 30px;
+              }
+              .otp-code {
+                font-size: 36px;
+                font-weight: 700;
+                letter-spacing: 8px;
+                color: #1d4ed8;
+                margin: 0;
+              }
+              .footer {
+                padding: 20px 30px;
+                background-color: #f8fafc;
+                border-top: 1px solid #e2e8f0;
+                text-align: center;
+                font-size: 13px;
+                color: #64748b;
+              }
+              .important-note {
+                font-size: 13px;
+                color: #ef4444;
+                margin-top: 10px;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="header">
+                <h1 class="logo-text">Moneytory</h1>
+              </div>
+              <div class="content">
+                <h2 class="title">Reset Kata Sandi</h2>
+                <p class="message">
+                  Halo, kami menerima permintaan reset kata sandi untuk akun Anda. 
+                  Gunakan kode OTP berikut untuk melanjutkan proses pemulihan akun:
+                </p>
+                <div class="otp-container">
+                  <h3 class="otp-code">${otp}</h3>
+                </div>
+                <p class="message">
+                  Kode OTP ini hanya berlaku selama <span style="font-weight: 600; color: #1d4ed8;">5 menit</span>.
+                  Jika Anda tidak meminta reset kata sandi, Anda dapat mengabaikan email ini dengan aman.
+                </p>
+                <p class="important-note">
+                  Jangan pernah membagikan kode OTP ini kepada siapapun!
+                </p>
+              </div>
+              <div class="footer">
+                <p style="margin: 0;">&copy; ${new Date().getFullYear()} My Wallets. Hak Cipta Dilindungi.</p>
+                <p style="margin: 8px 0 0 0;">Jika Anda memiliki pertanyaan, hubungi tim dukungan kami.</p>
+              </div>
+            </div>
+          </body>
+          </html>
+        `,
+      });
+      
+      if (error) {
+        Logger.error('Failed to send OTP email via Resend', JSON.stringify(error));
+        throw new InternalServerErrorException('Failed to send OTP email');
+      }
+    } catch (error) {
+      Logger.error('Exception when sending OTP email', error instanceof Error ? error.message : JSON.stringify(error));
+      throw new InternalServerErrorException('Failed to send OTP email');
+    }
+
+    return { message: 'If the email is registered, an OTP has been sent.' };
+  }
+
+  async verifyOtp(verifyOtpDto: VerifyOtpDto) {
+    const { email, otp } = verifyOtpDto;
+    const user = await this.prisma.user.findUnique({ where: { email } });
+
+    if (!user || user.resetPasswordOtp !== otp) {
+      throw new BadRequestException('Invalid OTP');
+    }
+
+    if (user.resetPasswordOtpExpires && new Date() > user.resetPasswordOtpExpires) {
+      throw new BadRequestException('OTP has expired');
+    }
+
+    const token = randomUUID();
+    const expires = new Date();
+    expires.setMinutes(expires.getMinutes() + 15); // Token valid for 15 minutes
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        resetPasswordOtp: null,
+        resetPasswordOtpExpires: null,
+        resetPasswordToken: token,
+        resetPasswordTokenExpires: expires,
+      },
+    });
+
+    return { token };
+  }
+
+  async resetPassword(resetPasswordDto: ResetPasswordDto) {
+    const { token, newPassword } = resetPasswordDto;
+    const user = await this.prisma.user.findFirst({
+      where: { resetPasswordToken: token },
+    });
+
+    if (!user) {
+      throw new BadRequestException('Invalid token');
+    }
+
+    if (user.resetPasswordTokenExpires && new Date() > user.resetPasswordTokenExpires) {
+      throw new BadRequestException('Token has expired');
+    }
+
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash: hashedPassword,
+        resetPasswordToken: null,
+        resetPasswordTokenExpires: null,
+      },
+    });
+
+    return { message: 'Password has been successfully reset' };
   }
 }

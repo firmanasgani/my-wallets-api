@@ -17,6 +17,11 @@ model User {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  resetPasswordOtp          String?
+  resetPasswordOtpExpires   DateTime?
+  resetPasswordToken        String?
+  resetPasswordTokenExpires DateTime?
+
   accounts              Account[]
   categories            Category[]
   transactions          Transaction[]
@@ -25,7 +30,7 @@ model User {
   budgets               Budget[]
   subscriptions         UserSubscription[]
   paymentTransactions   PaymentTransaction[]
-  FinancialGoals         FinancialGoal[]
+  FinancialGoals        FinancialGoal[]
 }
 
 model SubscriptionPlan {
@@ -167,7 +172,7 @@ model Transaction {
   recurringTransactionId String?
   recurringTransaction   RecurringTransaction? @relation(fields: [recurringTransactionId], references: [id], onDelete: SetNull)
   attachmentPath         String?
-  goalLedgers              GoalLedger[]
+  goalLedgers            GoalLedger[]
 
   @@index([userId, transactionType, transactionDate])
   @@index([userId, categoryId])
@@ -281,19 +286,19 @@ model RecurringTransaction {
 }
 
 model FinancialGoal {
-  id String @id @default(uuid())
-  userId String 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name String
-  description String?
-  targetAmount Decimal @db.Decimal(18, 2)
-  startDate DateTime @default(now())
-  targetDate DateTime?
-  status GoalStatus @default(ACTIVE)
-  priority Int? // optional ranking (1 = highest priority
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  ledgers GoalLedger[]
+  id           String       @id @default(uuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  description  String?
+  targetAmount Decimal      @db.Decimal(18, 2)
+  startDate    DateTime     @default(now())
+  targetDate   DateTime?
+  status       GoalStatus   @default(ACTIVE)
+  priority     Int? // optional ranking (1 = highest priority
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  ledgers      GoalLedger[]
 }
 
 enum GoalStatus {
@@ -303,18 +308,18 @@ enum GoalStatus {
 }
 
 model GoalLedger {
-  id String @id @default(uuid())
-  goalId String
-  goal FinancialGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
-  accountId String
-  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  id                     String              @id @default(uuid())
+  goalId                 String
+  goal                   FinancialGoal       @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  accountId              String
+  account                Account             @relation(fields: [accountId], references: [id], onDelete: Cascade)
   referenceTransactionId String?
-  referenceTransaction Transaction? @relation(fields: [referenceTransactionId], references: [id], onDelete: SetNull)
-  amount Decimal @db.Decimal(18, 2)
-  direction GoalLedgerDirection
-  type GoalLedgerType
-  note String?
-  createdAt DateTime @default(now())
+  referenceTransaction   Transaction?        @relation(fields: [referenceTransactionId], references: [id], onDelete: SetNull)
+  amount                 Decimal             @db.Decimal(18, 2)
+  direction              GoalLedgerDirection
+  type                   GoalLedgerType
+  note                   String?
+  createdAt              DateTime            @default(now())
 
   @@index([goalId])
   @@index([accountId])
