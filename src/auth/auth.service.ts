@@ -30,6 +30,9 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 
 @Injectable()
 export class AuthService {
+  // In-memory store for OTP rate limiting: email -> timestamp of last request
+  private otpRequestTimeStore = new Map<string, number>();
+
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
@@ -648,6 +651,28 @@ export class AuthService {
     if (!user) {
       // Don't leak user existence
       return { message: 'If the email is registered, an OTP has been sent.' };
+    }
+
+    // Rate Limiting (In-memory, 1 request per 1 minute)
+    const now = Date.now();
+    const lastRequestTime = this.otpRequestTimeStore.get(email);
+    const cooldownPeriod = 60 * 1000; // 1 minute in milliseconds
+
+    if (lastRequestTime && now - lastRequestTime < cooldownPeriod) {
+      const waitTimeMath = Math.ceil((cooldownPeriod - (now - lastRequestTime)) / 1000);
+      throw new BadRequestException(`Harap tunggu ${waitTimeMath} detik sebelum meminta OTP baru.`);
+    }
+
+    // Update last request time
+    this.otpRequestTimeStore.set(email, now);
+    
+    // Cleanup old entries (optional, to prevent memory leak long-term)
+    if (this.otpRequestTimeStore.size > 1000) {
+      for (const [key, time] of this.otpRequestTimeStore.entries()) {
+        if (now - time > cooldownPeriod) {
+          this.otpRequestTimeStore.delete(key);
+        }
+      }
     }
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
