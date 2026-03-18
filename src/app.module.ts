@@ -19,6 +19,7 @@ import { RecurringTransactionsModule } from './recurring-transactions/recurring-
 import { ReportsModule } from './reports/reports.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { FinancialGoalsModule } from './financial-goals/financial-goals.module';
+import { BusinessModule } from './business/business.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { FinancialGoalsModule } from './financial-goals/financial-goals.module';
     ReportsModule,
     SubscriptionsModule,
     FinancialGoalsModule,
+    BusinessModule,
   ],
   controllers: [AppController],
   providers: [

@@ -286,6 +286,30 @@ async function main() {
       discountPrice: 250000,
       durationMonths: 12,
     },
+    {
+      name: 'Business 1 Month',
+      code: 'BUSINESS_1M',
+      description: 'Business accounting access for 1 month',
+      price: 149000,
+      discountPrice: 129000,
+      durationMonths: 1,
+    },
+    {
+      name: 'Business 6 Months',
+      code: 'BUSINESS_6M',
+      description: 'Business accounting access for 6 months',
+      price: 749000,
+      discountPrice: 649000,
+      durationMonths: 6,
+    },
+    {
+      name: 'Business 1 Year',
+      code: 'BUSINESS_12M',
+      description: 'Business accounting access for 1 year',
+      price: 1299000,
+      discountPrice: 1099000,
+      durationMonths: 12,
+    },
   ];
 
   const seededPlans: any[] = [];

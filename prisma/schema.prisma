@@ -31,6 +31,10 @@ model User {
   subscriptions         UserSubscription[]
   paymentTransactions   PaymentTransaction[]
   FinancialGoals        FinancialGoal[]
+
+  // Business relations
+  ownedCompany    Company?        @relation("CompanyOwner")
+  companyMembers  CompanyMember[]
 }
 
 model SubscriptionPlan {
@@ -199,6 +203,13 @@ enum LogActionType {
   SUBSCRIPTION_WEBHOOK
   PAYMENT_SUCCESS
   PAYMENT_FAILED
+
+  // Business actions
+  BUSINESS_COMPANY_CREATE
+  BUSINESS_COMPANY_UPDATE
+  BUSINESS_MEMBER_INVITE
+  BUSINESS_MEMBER_ROLE_UPDATE
+  BUSINESS_MEMBER_REVOKE
 }
 
 model PaymentTransaction {
@@ -332,8 +343,85 @@ enum GoalLedgerDirection {
 }
 
 enum GoalLedgerType {
-  ALLOCATE // user menyisihkan uang 
+  ALLOCATE // user menyisihkan uang
   SPEND // Dipakai sesuai tujuan
   RELEASE // Melepas alokasi, misal karena batal mencapai goal
   ADJUST // Penyesuaian manual, misal karena kesalahan input atau perubahan rencana
+}
+
+// ─────────────────────────────────────────────
+// BUSINESS LAYER
+// ─────────────────────────────────────────────
+
+enum CompanyMemberRole {
+  OWNER
+  ADMIN
+  STAFF
+  VIEWER
+}
+
+enum CompanyMemberStatus {
+  PENDING
+  ACTIVE
+  REVOKED
+}
+
+enum ChartOfAccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+model Company {
+  id         String   @id @default(uuid())
+  ownerId    String   @unique
+  owner      User     @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  name       String
+  npwp       String?
+  logoUrl    String?
+  address    String?
+  phone      String?
+  email      String?
+  taxEnabled Boolean  @default(true)
+  taxRate    Decimal  @default(11) @db.Decimal(5, 2)
+  currency   String   @default("IDR")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  members         CompanyMember[]
+  chartOfAccounts ChartOfAccount[]
+}
+
+model CompanyMember {
+  id        String              @id @default(uuid())
+  companyId String
+  company   Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      CompanyMemberRole
+  invitedAt DateTime            @default(now())
+  joinedAt  DateTime?
+  status    CompanyMemberStatus @default(PENDING)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+
+  @@unique([companyId, userId])
+  @@index([userId, status])
+}
+
+model ChartOfAccount {
+  id        String             @id @default(uuid())
+  companyId String
+  company   Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  code      String
+  name      String
+  type      ChartOfAccountType
+  isSystem  Boolean            @default(false)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  @@unique([companyId, code])
+  @@index([companyId, type])
 }

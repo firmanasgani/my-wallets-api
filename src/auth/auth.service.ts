@@ -623,9 +623,18 @@ export class AuthService {
       daysRemaining = Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
     }
 
-    const displayPlan = activeSubscription?.plan.code?.startsWith('PREMIUM')
-      ? 'PREMIUM'
-      : 'FREE';
+    let displayPlan = 'FREE';
+    const planCode = activeSubscription?.plan?.code;
+    
+    if (planCode) {
+      if (planCode.startsWith('PREMIUM')) {
+        displayPlan = 'PREMIUM';
+      } else if (planCode.startsWith('BUSINESS')) {
+        displayPlan = 'BUSINESS';
+      } else {
+        displayPlan = planCode;
+      }
+    }
 
     return {
       ...userWithoutPassword,
