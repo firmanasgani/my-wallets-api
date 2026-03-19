@@ -404,11 +404,16 @@ model CompanyMember {
   invitedAt DateTime            @default(now())
   joinedAt  DateTime?
   status    CompanyMemberStatus @default(PENDING)
-  createdAt DateTime            @default(now())
-  updatedAt DateTime            @updatedAt
+
+  inviteToken          String?   @unique
+  inviteTokenExpiresAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([companyId, userId])
   @@index([userId, status])
+  @@index([inviteToken])
 }
 
 model ChartOfAccount {

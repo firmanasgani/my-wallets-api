@@ -1,6 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ChartOfAccountType, Company } from '@prisma/client';
+import { CreateChartOfAccountDto } from './dto/create-chart-of-accounts.dto';
+import { UpdateChartOfAccountsDto } from './dto/update-chart-of-accounts.dto';
 
 @Injectable()
 export class ChartOfAccountsService {
@@ -26,5 +28,40 @@ export class ChartOfAccountsService {
     }
 
     return grouped;
+  }
+
+  async findById(id: string) {
+    const account = await this.prisma.chartOfAccount.findFirst({
+      where: { id }
+    })
+    if (!account) throw new NotFoundException('Account not found');
+    return account;
+  }
+
+  async create(company: Company, dto: CreateChartOfAccountDto) {
+    const account = await this.prisma.chartOfAccount.create({
+      data: {
+        companyId: company.id,
+        code: dto.code,
+        name: dto.name,
+        type: dto.type,
+      },
+    });
+    return account;
+  }
+
+  async update(id: string, dto: UpdateChartOfAccountsDto) {
+    const account = await this.prisma.chartOfAccount.update({
+      where: { id },
+      data: dto,
+    });
+    return account;
+  }
+
+  async delete(id: string) {
+    const account = await this.prisma.chartOfAccount.delete({
+      where: { id },
+    });
+    return account;
   }
 }

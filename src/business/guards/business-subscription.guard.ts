@@ -5,7 +5,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { SubscriptionStatus } from '@prisma/client';
+import { CompanyMemberStatus, SubscriptionStatus } from '@prisma/client';
 
 const BUSINESS_PLAN_CODES = ['BUSINESS_1M', 'BUSINESS_6M', 'BUSINESS_12M'];
 
@@ -17,21 +17,39 @@ export class BusinessSubscriptionGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const user = request.user;
 
-    const activeSub = await this.prisma.userSubscription.findFirst({
+    // Pass 1: user has their own active Business subscription (OWNER)
+    const ownSub = await this.prisma.userSubscription.findFirst({
       where: {
         userId: user.id,
         status: SubscriptionStatus.ACTIVE,
         plan: { code: { in: BUSINESS_PLAN_CODES } },
       },
-      include: { plan: { select: { code: true } } },
     });
 
-    if (!activeSub) {
-      throw new ForbiddenException(
-        'Active Business subscription is required to access this feature.',
-      );
-    }
+    if (ownSub) return true;
 
-    return true;
+    // Pass 2: user is an active member of a company whose OWNER has an active Business subscription
+    const membership = await this.prisma.companyMember.findFirst({
+      where: {
+        userId: user.id,
+        status: CompanyMemberStatus.ACTIVE,
+        company: {
+          owner: {
+            subscriptions: {
+              some: {
+                status: SubscriptionStatus.ACTIVE,
+                plan: { code: { in: BUSINESS_PLAN_CODES } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (membership) return true;
+
+    throw new ForbiddenException(
+      'Active Business subscription is required to access this feature.',
+    );
   }
 }

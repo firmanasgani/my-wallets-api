@@ -310,6 +310,14 @@ async function main() {
       discountPrice: 1099000,
       durationMonths: 12,
     },
+    {
+      name: 'Business Member',
+      code: 'BUSINESS_MEMBER',
+      description: 'Auto-assigned when a user accepts a company invitation. Free, managed by the system.',
+      price: 0,
+      discountPrice: null,
+      durationMonths: null,
+    },
   ];
 
   const seededPlans: any[] = [];
