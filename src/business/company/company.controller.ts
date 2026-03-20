@@ -1,11 +1,19 @@
 import {
+  BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
+  Patch,
   Post,
   Put,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { CompanyService } from './company.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
@@ -33,7 +41,7 @@ export class CompanyController {
   @Get()
   @UseGuards(CompanyMemberGuard, CompanyRoleGuard)
   findMine(@GetCompany() company: Company) {
-    return company;
+    return this.companyService.withResolvedLogoUrl(company);
   }
 
   @Put()
@@ -45,5 +53,32 @@ export class CompanyController {
     @Body() dto: UpdateCompanyDto,
   ) {
     return this.companyService.update(user.id, company, dto);
+  }
+
+  @Patch('logo')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(CompanyMemberGuard, CompanyRoleGuard)
+  @RequireCompanyRole(CompanyMemberRole.ADMIN, CompanyMemberRole.OWNER)
+  @UseInterceptors(FileInterceptor('file'))
+  uploadLogo(
+    @GetUser() user: User,
+    @GetCompany() company: Company,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) {
+      throw new BadRequestException('No file uploaded.');
+    }
+    return this.companyService.uploadLogo(user.id, company, file);
+  }
+
+  @Delete('logo')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(CompanyMemberGuard, CompanyRoleGuard)
+  @RequireCompanyRole(CompanyMemberRole.ADMIN, CompanyMemberRole.OWNER)
+  deleteLogo(
+    @GetUser() user: User,
+    @GetCompany() company: Company,
+  ) {
+    return this.companyService.deleteLogo(user.id, company);
   }
 }

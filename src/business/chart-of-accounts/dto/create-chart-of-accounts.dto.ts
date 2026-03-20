@@ -1,5 +1,5 @@
 import { ChartOfAccountType } from "@prisma/client";
-import { IsEnum, IsNotEmpty, IsString } from "class-validator";
+import { IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, Min } from "class-validator";
 
 export class CreateChartOfAccountDto {
     @IsNotEmpty()
@@ -11,11 +11,11 @@ export class CreateChartOfAccountDto {
     name: string;
 
     @IsNotEmpty()
-    @IsString()
-    companyId: string;
-
-
-    @IsNotEmpty()
     @IsEnum(ChartOfAccountType)
     type: ChartOfAccountType;
+
+    @IsOptional()
+    @IsNumber()
+    @Min(0)
+    openingBalance?: number;
 }

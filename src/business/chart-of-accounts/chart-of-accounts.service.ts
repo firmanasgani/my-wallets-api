@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ChartOfAccountType, Company } from '@prisma/client';
 import { CreateChartOfAccountDto } from './dto/create-chart-of-accounts.dto';
@@ -14,7 +19,6 @@ export class ChartOfAccountsService {
       orderBy: { code: 'asc' },
     });
 
-    // Group by type for a structured response
     const grouped: Record<ChartOfAccountType, typeof accounts> = {
       ASSET: [],
       LIABILITY: [],
@@ -30,38 +34,71 @@ export class ChartOfAccountsService {
     return grouped;
   }
 
-  async findById(id: string) {
+  async findById(companyId: string, id: string) {
     const account = await this.prisma.chartOfAccount.findFirst({
-      where: { id }
-    })
-    if (!account) throw new NotFoundException('Account not found');
+      where: { id, companyId },
+    });
+    if (!account) throw new NotFoundException('Chart of account not found.');
     return account;
   }
 
   async create(company: Company, dto: CreateChartOfAccountDto) {
-    const account = await this.prisma.chartOfAccount.create({
+    const existing = await this.prisma.chartOfAccount.findUnique({
+      where: { companyId_code: { companyId: company.id, code: dto.code } },
+    });
+    if (existing) {
+      throw new BadRequestException(`COA code "${dto.code}" already exists in this company.`);
+    }
+
+    return this.prisma.chartOfAccount.create({
       data: {
         companyId: company.id,
         code: dto.code,
         name: dto.name,
         type: dto.type,
+        openingBalance: dto.openingBalance ?? 0,
+        isSystem: false,
       },
     });
-    return account;
   }
 
-  async update(id: string, dto: UpdateChartOfAccountsDto) {
-    const account = await this.prisma.chartOfAccount.update({
+  async update(companyId: string, id: string, dto: UpdateChartOfAccountsDto) {
+    const account = await this.prisma.chartOfAccount.findFirst({
+      where: { id, companyId },
+    });
+    if (!account) throw new NotFoundException('Chart of account not found.');
+    if (account.isSystem) {
+      throw new ForbiddenException('System accounts cannot be edited.');
+    }
+
+    return this.prisma.chartOfAccount.update({
       where: { id },
       data: dto,
     });
-    return account;
   }
 
-  async delete(id: string) {
-    const account = await this.prisma.chartOfAccount.delete({
-      where: { id },
+  async delete(companyId: string, id: string) {
+    const account = await this.prisma.chartOfAccount.findFirst({
+      where: { id, companyId },
     });
-    return account;
+    if (!account) throw new NotFoundException('Chart of account not found.');
+    if (account.isSystem) {
+      throw new ForbiddenException('System accounts cannot be deleted.');
+    }
+
+    // Guard: tidak bisa hapus jika sudah ada BusinessTransaction yang mereferensikan
+    const txCount = await this.prisma.businessTransaction.count({
+      where: {
+        OR: [{ debitCoaId: id }, { creditCoaId: id }],
+      },
+    });
+    if (txCount > 0) {
+      throw new BadRequestException(
+        'Cannot delete this account because it is referenced by existing transactions.',
+      );
+    }
+
+    await this.prisma.chartOfAccount.delete({ where: { id } });
+    return { message: 'Chart of account deleted.' };
   }
 }

@@ -18,6 +18,7 @@ import { Resend } from 'resend';
 import * as crypto from 'crypto';
 import { InviteMemberDto } from './dto/invite-member.dto';
 import { UpdateMemberRoleDto } from './dto/update-role.dto';
+import { MinioService } from '../../common/minio/minio.service';
 
 const MAX_MEMBERS = 5;
 
@@ -42,12 +43,13 @@ export class MembersService {
   constructor(
     private prisma: PrismaService,
     private logsService: LogsService,
+    private minioService: MinioService,
   ) {
     this.resend = new Resend(process.env.RESEND_API_KEY);
   }
 
   async findAll(company: Company) {
-    return this.prisma.companyMember.findMany({
+    const members = await this.prisma.companyMember.findMany({
       where: {
         companyId: company.id,
         status: { not: CompanyMemberStatus.REVOKED },
@@ -65,6 +67,23 @@ export class MembersService {
       },
       orderBy: { invitedAt: 'asc' },
     });
+
+    return Promise.all(
+      members.map(async (member) => {
+        let profilePictureUrl: string | null = null;
+        if (member.user?.profilePicture) {
+          try {
+            profilePictureUrl = await this.minioService.getFileUrl(member.user.profilePicture);
+          } catch {
+            profilePictureUrl = null;
+          }
+        }
+        return {
+          ...member,
+          user: { ...member.user, profilePictureUrl },
+        };
+      }),
+    );
   }
 
   async invite(

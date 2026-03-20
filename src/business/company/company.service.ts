@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { LogsService } from '../../logs/logs.service';
+import { MinioService } from '../../common/minio/minio.service';
 import {
   ChartOfAccountType,
   Company,
@@ -14,6 +15,7 @@ import {
 } from '@prisma/client';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
+import { randomUUID } from 'crypto';
 
 const DEFAULT_CHART_OF_ACCOUNTS: {
   code: string;
@@ -39,7 +41,18 @@ export class CompanyService {
   constructor(
     private prisma: PrismaService,
     private logsService: LogsService,
+    private minioService: MinioService,
   ) {}
+
+  async withResolvedLogoUrl(company: Company): Promise<Company & { logoPresignedUrl: string | null }> {
+    if (!company.logoUrl) return { ...company, logoPresignedUrl: null };
+    try {
+      const url = await this.minioService.getFileUrl(company.logoUrl);
+      return { ...company, logoPresignedUrl: url };
+    } catch {
+      return { ...company, logoPresignedUrl: null };
+    }
+  }
 
   async create(userId: string, dto: CreateCompanyDto): Promise<Company> {
     const existing = await this.prisma.company.findUnique({
@@ -143,5 +156,71 @@ export class CompanyService {
     });
 
     return updated;
+  }
+
+  async uploadLogo(
+    userId: string,
+    company: Company,
+    file: Express.Multer.File,
+  ): Promise<Company> {
+    const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/webp'];
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      throw new BadRequestException(
+        'Invalid file type. Only JPEG, PNG, and WebP images are allowed.',
+      );
+    }
+
+    if (file.size > 2 * 1024 * 1024) {
+      throw new BadRequestException('File size must not exceed 2MB.');
+    }
+
+    const ext = file.originalname.split('.').pop();
+    const filePath = `company-logos/${company.id}-${Date.now()}-${randomUUID()}.${ext}`;
+
+    await this.minioService.uploadFile(file, filePath);
+
+    if (company.logoUrl) {
+      await this.minioService.deleteFile(company.logoUrl).catch(() => null);
+    }
+
+    const updated = await this.prisma.company.update({
+      where: { id: company.id },
+      data: { logoUrl: filePath },
+    });
+
+    await this.logsService.create({
+      userId,
+      actionType: LogActionType.BUSINESS_COMPANY_UPDATE,
+      entityType: 'Company',
+      entityId: company.id,
+      description: `Company "${company.name}" logo uploaded.`,
+      details: { logoUrl: filePath },
+    });
+
+    return this.withResolvedLogoUrl(updated);
+  }
+
+  async deleteLogo(userId: string, company: Company): Promise<Company & { logoPresignedUrl: null }> {
+    if (!company.logoUrl) {
+      throw new BadRequestException('Company does not have a logo.');
+    }
+
+    await this.minioService.deleteFile(company.logoUrl).catch(() => null);
+
+    const updated = await this.prisma.company.update({
+      where: { id: company.id },
+      data: { logoUrl: null },
+    });
+
+    await this.logsService.create({
+      userId,
+      actionType: LogActionType.BUSINESS_COMPANY_UPDATE,
+      entityType: 'Company',
+      entityId: company.id,
+      description: `Company "${company.name}" logo deleted.`,
+      details: {},
+    });
+
+    return { ...updated, logoPresignedUrl: null };
   }
 }

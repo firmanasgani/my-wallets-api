@@ -28,10 +28,12 @@ src/
 ├── business/
 │   ├── company/           ← Company setup & profile
 │   ├── members/           ← Multi-user & roles
-│   ├── chart-of-accounts/ ← COA auto-generated
+│   ├── chart-of-accounts/ ← COA auto-generated + custom CRUD + Buku Besar
+│   ├── contacts/          ← Rekanan: Customer, Vendor, Employee
 │   ├── invoices/          ← Invoice management
+│   ├── transactions/      ← Manual BusinessTransaction (double-entry)
 │   ├── tax/               ← Tax settings & PPN calculation
-│   ├── financial-reports/ ← P&L, Balance Sheet, Cash Flow
+│   ├── financial-reports/ ← P&L, Balance Sheet, Cash Flow, Jurnal Umum
 │   └── kpi/               ← KPI Dashboard
 ```
 
@@ -74,19 +76,24 @@ CompanyMember
 ```
 
 ### 3.3 `ChartOfAccount` (COA)
-Auto-generated saat company dibuat. User tidak bisa buat manual.
+Auto-generated saat company dibuat. User bisa tambah COA custom (non-system).
 
 ```
 ChartOfAccount
 ├── id
-├── companyId       → Company.id
-├── code            String (e.g. "1-001", "2-001")
-├── name            String (e.g. "Kas", "Piutang Usaha")
-├── type            Enum: ASSET | LIABILITY | EQUITY | REVENUE | EXPENSE
-├── isSystem        Boolean (true = auto-generated, tidak bisa hapus)
+├── companyId        → Company.id
+├── code             String (e.g. "1-001", "2-001")
+├── name             String (e.g. "Kas", "Piutang Usaha")
+├── type             Enum: ASSET | LIABILITY | EQUITY | REVENUE | EXPENSE
+├── openingBalance   Decimal default 0  ← saldo awal saat company mulai pakai sistem
+├── isSystem         Boolean (true = auto-generated, tidak bisa edit/hapus)
 ├── createdAt
 └── updatedAt
 ```
+
+> COA `isSystem = true` tidak bisa diedit atau dihapus.
+> COA custom (isSystem = false) bisa diedit/dihapus selama belum ada `BusinessTransaction` yang mereferensikannya.
+> `openingBalance` diisi saat setup awal untuk UMKM yang baru migrasi dari pembukuan manual/Excel.
 
 **Default COA yang di-generate otomatis saat Company dibuat:**
 
@@ -105,17 +112,40 @@ ChartOfAccount
 | 5-002 | Beban Gaji           | EXPENSE   |
 | 5-003 | Beban Sewa           | EXPENSE   |
 
-### 3.4 `Invoice`
+### 3.4 `Contact`
+Pihak eksternal perusahaan (customer, vendor, karyawan) beserta detail rekening bank.
+
+```
+Contact
+├── id
+├── companyId           → Company.id
+├── type                Enum: CUSTOMER | VENDOR | EMPLOYEE
+├── name
+├── email
+├── phone
+├── bankName
+├── bankAccountNumber
+├── bankAccountHolder
+├── notes
+├── createdAt
+└── updatedAt
+```
+
+> Contact digunakan sebagai referensi pengirim/penerima di `Invoice` dan `BusinessTransaction`.
+> Detail rekening bank pihak eksternal disimpan di sini, bukan di COA (COA hanya untuk akun internal perusahaan).
+
+### 3.5 `Invoice`
 Manajemen invoice/faktur.
 
 ```
 Invoice
 ├── id
 ├── companyId        → Company.id
+├── contactId        → Contact.id (nullable, type: CUSTOMER)
 ├── invoiceNumber    String unique per company (auto-generated)
-├── clientName
-├── clientEmail
-├── clientAddress
+├── clientName       String (snapshot dari Contact atau diisi manual)
+├── clientEmail      String (snapshot dari Contact atau diisi manual)
+├── clientAddress    String (snapshot dari Contact atau diisi manual)
 ├── issueDate
 ├── dueDate
 ├── status           Enum: DRAFT | SENT | PAID | OVERDUE
@@ -128,7 +158,10 @@ Invoice
 └── updatedAt
 ```
 
-### 3.5 `InvoiceItem`
+> Jika `contactId` diset, `clientName/clientEmail/clientAddress` di-populate otomatis dari Contact (sebagai snapshot).
+> Snapshot disimpan agar data invoice tidak berubah jika Contact diedit/dihapus di kemudian hari.
+
+### 3.6 `InvoiceItem`
 Line item dalam invoice.
 
 ```
@@ -144,23 +177,27 @@ InvoiceItem
 └── total          Decimal (computed)
 ```
 
-### 3.6 `BusinessTransaction`
-Mapping transaksi ke COA untuk keperluan laporan keuangan.
+### 3.7 `BusinessTransaction`
+Double-entry transaction ke COA untuk keperluan laporan keuangan.
 Tidak menggantikan `Transaction` existing — ini layer akuntansi terpisah.
 
 ```
 BusinessTransaction
 ├── id
 ├── companyId          → Company.id
-├── chartOfAccountId   → ChartOfAccount.id
-├── invoiceId          → Invoice.id (nullable)
+├── debitCoaId         → ChartOfAccount.id  (akun yang di-debit)
+├── creditCoaId        → ChartOfAccount.id  (akun yang di-kredit)
+├── contactId          → Contact.id (nullable, pengirim/penerima eksternal)
+├── invoiceId          → Invoice.id (nullable, jika berasal dari invoice)
 ├── amount             Decimal
-├── type               Enum: DEBIT | CREDIT
-├── description
+├── description        String (keterangan, misal "Gaji Maret - Andi")
 ├── transactionDate
 ├── createdByUserId    → User.id
 └── createdAt
 ```
+
+> Kedua sisi double-entry (`debitCoaId` dan `creditCoaId`) selalu merujuk ke COA internal perusahaan.
+> Pihak eksternal (rekening pengirim/penerima) dicatat via `contactId` — bukan sebagai COA.
 
 ---
 
@@ -209,12 +246,15 @@ DRAFT ──► SENT ──► PAID
   └──────────────► OVERDUE (cron job check dueDate)
 
 POST   /business/invoices           → buat invoice (DRAFT)
+                                      jika contactId diset → snapshot client info dari Contact
 PUT    /business/invoices/:id       → edit invoice (hanya saat DRAFT)
 POST   /business/invoices/:id/send  → ubah status → SENT
 POST   /business/invoices/:id/pay   → ubah status → PAID
-                                      + otomatis buat BusinessTransaction
-                                        (debit: 1-002 Bank / 1-001 Kas)
-                                        (credit: 4-001 Pendapatan Penjualan)
+                                      body: { paymentCoaId, paymentDate }
+                                      + otomatis buat BusinessTransaction:
+                                        debit:  paymentCoaId (COA Bank/Kas yang dipilih user)
+                                        credit: 4-001 Pendapatan Penjualan
+                                        contactId: Invoice.contactId
 DELETE /business/invoices/:id       → soft delete (hanya DRAFT)
 ```
 
@@ -244,14 +284,14 @@ Saat Invoice PAID:
 
 ### 4.5 Financial Reports Flow
 
-Semua laporan di-generate **dari `BusinessTransaction`** — bukan dari personal `Transaction`.
+Semua laporan di-generate **dari `BusinessTransaction` + `openingBalance` COA** — bukan dari personal `Transaction`.
 
 #### P&L (Profit & Loss)
 ```
 GET /business/reports/profit-loss?startDate=&endDate=
 
-Revenue  = sum(BusinessTransaction WHERE coa.type = REVENUE AND type = CREDIT)
-Expense  = sum(BusinessTransaction WHERE coa.type = EXPENSE AND type = DEBIT)
+Revenue    = sum(BusinessTransaction WHERE creditCoaId → coa.type = REVENUE)
+Expense    = sum(BusinessTransaction WHERE debitCoaId  → coa.type = EXPENSE)
 Net Profit = Revenue - Expense
 ```
 
@@ -259,9 +299,13 @@ Net Profit = Revenue - Expense
 ```
 GET /business/reports/balance-sheet?date=
 
-Assets      = sum(BusinessTransaction WHERE coa.type = ASSET, net balance)
-Liabilities = sum(BusinessTransaction WHERE coa.type = LIABILITY, net balance)
-Equity      = Modal Pemilik + Laba Ditahan + Net Profit saat ini
+Saldo per COA = openingBalance + sum(DEBIT movements) - sum(CREDIT movements)
+  (untuk ASSET & EXPENSE: normal balance = DEBIT)
+  (untuk LIABILITY, EQUITY, REVENUE: normal balance = CREDIT)
+
+Assets      = sum(saldo COA type ASSET)
+Liabilities = sum(saldo COA type LIABILITY)
+Equity      = sum(saldo COA type EQUITY) + Net Profit s/d tanggal tersebut
               Assets = Liabilities + Equity ✓
 ```
 
@@ -270,10 +314,26 @@ Equity      = Modal Pemilik + Laba Ditahan + Net Profit saat ini
 GET /business/reports/cash-flow?startDate=&endDate=
 
 Operating Cash Flow:
-  + Penerimaan dari pelanggan (Invoice PAID)
-  - Pembayaran beban operasional
+  + Penerimaan dari pelanggan (Invoice PAID → debit COA type ASSET/Kas/Bank)
+  - Pembayaran beban operasional (debit COA type EXPENSE)
 
-Ending Cash = Opening Cash + Net Cash Flow
+Opening Cash = openingBalance COA Kas + COA Bank
+Ending Cash  = Opening Cash + Net Cash Flow
+```
+
+#### Jurnal Umum (General Journal)
+```
+GET /business/reports/journal?startDate=&endDate=
+
+Menampilkan semua BusinessTransaction dalam format jurnal kronologis.
+
+Response per entry:
+├── date
+├── description
+├── reference       (invoiceNumber jika berasal dari invoice)
+├── contact         (nama Contact jika ada)
+├── debit  { code, name, amount }
+└── credit { code, name, amount }
 ```
 
 ### 4.6 KPI Dashboard Flow
@@ -361,7 +421,20 @@ Cek role minimum yang diperlukan (e.g. `@RequireRole('ADMIN')`).
     DELETE /:id                 → revoke member
 
 /business/chart-of-accounts
-    GET    /                    → list semua COA (auto-generated)
+    GET    /                    → list semua COA
+    POST   /                    → tambah COA custom (non-system)
+    PUT    /:id                 → edit COA (non-system only) + set openingBalance
+    DELETE /:id                 → hapus COA (non-system, belum ada transaksi)
+    GET    /:id/ledger          → Buku Besar per COA
+                                  query: ?startDate=&endDate=
+                                  response: { openingBalance, entries: [{ date, description, debit, credit, balance }], closingBalance }
+
+/business/contacts
+    GET    /                    → list contacts (filter by type: CUSTOMER|VENDOR|EMPLOYEE)
+    POST   /                    → tambah contact baru
+    GET    /:id                 → detail contact
+    PUT    /:id                 → edit contact
+    DELETE /:id                 → hapus contact
 
 /business/invoices
     GET    /                    → list invoices (filter by status)
@@ -370,12 +443,19 @@ Cek role minimum yang diperlukan (e.g. `@RequireRole('ADMIN')`).
     PUT    /:id                 → edit invoice (DRAFT only)
     DELETE /:id                 → hapus invoice (DRAFT only)
     POST   /:id/send            → kirim invoice → status SENT
-    POST   /:id/pay             → tandai lunas → status PAID
+    POST   /:id/pay             → tandai lunas → status PAID (body: paymentCoaId, paymentDate)
+
+/business/transactions
+    GET    /                    → list business transactions
+    POST   /                    → input transaksi manual (expense, beban, dll)
+                                  body: { debitCoaId, creditCoaId, contactId?, amount, description, transactionDate }
+    DELETE /:id                 → hapus transaksi (bukan dari invoice)
 
 /business/reports
     GET    /profit-loss         → Laporan Laba Rugi
     GET    /balance-sheet       → Neraca Keuangan
     GET    /cash-flow           → Arus Kas
+    GET    /journal             → Jurnal Umum (semua entry kronologis)
 
 /business/kpi
     GET    /                    → KPI Dashboard summary
@@ -389,12 +469,12 @@ Cek role minimum yang diperlukan (e.g. `@RequireRole('ADMIN')`).
 |------|-------|------------|
 | **1** | Subscription Plans + Company Setup + COA | Fondasi: buat company & auto-generate COA |
 | **2** | Multi-user & Role Management | Invite & manage team |
-| **3** | Invoice Management (CRUD + lifecycle) | Core business feature |
-| **4** | BusinessTransaction & Tax Calculation | Mapping ke COA saat invoice PAID |
-| **5** | Financial Reports (P&L, Balance Sheet, Cash Flow) | Generate dari BusinessTransaction |
+| **3** | Contact CRUD + COA CRUD (+ openingBalance) + Invoice Management | Contact sebagai rekanan, COA custom + saldo awal, invoice lifecycle |
+| **4** | BusinessTransaction (double-entry) + Manual Transaction + Tax | Double-entry ke COA, input manual expense, PPN |
+| **5** | Financial Reports (P&L, Balance Sheet, Cash Flow, Jurnal Umum) + Buku Besar per COA | Generate dari BusinessTransaction + openingBalance |
 | **6** | KPI Dashboard | Agregasi data dari laporan |
 | **7** | Audit Log extension + Cron Overdue | Finalisasi & polish |
 
 ---
 
-*End of Document — v1.0 — 2026-03-03*
+*End of Document — v1.2 — 2026-03-19*

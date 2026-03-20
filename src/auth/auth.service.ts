@@ -340,7 +340,7 @@ export class AuthService {
     const fileExtension = file.originalname.split('.').pop();
     const uniqueId = randomUUID();
     const fileName = `${timestamp}-${uniqueId}.${fileExtension}`;
-    const filePath = `/profile/${fileName}`;
+    const filePath = `profile/${fileName}`;
 
     try {
       // Upload new file to MinIO

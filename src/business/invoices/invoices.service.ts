@@ -1,0 +1,658 @@
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { PrismaService } from '../../prisma/prisma.service';
+import { MinioService } from '../../common/minio/minio.service';
+import { Company, InvoiceStatus, LogActionType, Prisma } from '@prisma/client';
+import { LogsService } from '../../logs/logs.service';
+import { CreateInvoiceDto } from './dto/create-invoice.dto';
+import { UpdateInvoiceDto } from './dto/update-invoice.dto';
+import { PayInvoiceDto } from './dto/pay-invoice.dto';
+import { randomUUID } from 'crypto';
+import { Resend } from 'resend';
+
+@Injectable()
+export class InvoicesService {
+  private readonly logger = new Logger(InvoicesService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private logsService: LogsService,
+    private minioService: MinioService,
+  ) {}
+
+  // ───────────────────────────────────────────────────
+  // Helpers
+  // ───────────────────────────────────────────────────
+
+  private async generateInvoiceNumber(companyId: string): Promise<string> {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const prefix = `INV-${yyyy}-${mm}-`;
+
+    const last = await this.prisma.invoice.findFirst({
+      where: { companyId, invoiceNumber: { startsWith: prefix } },
+      orderBy: { invoiceNumber: 'desc' },
+      select: { invoiceNumber: true },
+    });
+
+    let seq = 1;
+    if (last) {
+      const parts = last.invoiceNumber.split('-');
+      seq = parseInt(parts[parts.length - 1], 10) + 1;
+    }
+
+    return `${prefix}${String(seq).padStart(4, '0')}`;
+  }
+
+  private computeItems(
+    rawItems: Array<{
+      description: string;
+      quantity: number;
+      unitPrice: number;
+      taxable?: boolean;
+      discountAmount?: number;
+    }>,
+    taxEnabled: boolean,
+    taxRate: Prisma.Decimal,
+  ) {
+    return rawItems.map((item) => {
+      const qty = new Prisma.Decimal(item.quantity);
+      const price = new Prisma.Decimal(item.unitPrice);
+      const discount = new Prisma.Decimal(item.discountAmount ?? 0);
+      const lineSubtotal = qty.mul(price);
+      const lineAfterDiscount = lineSubtotal.sub(discount);
+      const shouldTax = item.taxable && taxEnabled;
+      const itemTaxRate = shouldTax ? taxRate : new Prisma.Decimal(0);
+      const taxAmount = shouldTax
+        ? lineAfterDiscount.mul(taxRate).div(100)
+        : new Prisma.Decimal(0);
+      const total = lineAfterDiscount.add(taxAmount);
+
+      return {
+        description: item.description,
+        quantity: qty,
+        unitPrice: price,
+        discountAmount: discount,
+        taxable: item.taxable ?? false,
+        taxRate: itemTaxRate,
+        taxAmount,
+        total,
+      };
+    });
+  }
+
+  private computeTotals(computedItems: ReturnType<typeof this.computeItems>) {
+    const subtotal = computedItems.reduce(
+      (acc, i) => acc.add(i.quantity.mul(i.unitPrice).sub(i.discountAmount)),
+      new Prisma.Decimal(0),
+    );
+    const taxAmount = computedItems.reduce(
+      (acc, i) => acc.add(i.taxAmount),
+      new Prisma.Decimal(0),
+    );
+    return { subtotal, taxAmount, totalAmount: subtotal.add(taxAmount) };
+  }
+
+  // ───────────────────────────────────────────────────
+  // CRUD
+  // ───────────────────────────────────────────────────
+
+  async findAll(
+    company: Company,
+    status?: InvoiceStatus,
+    search?: string,
+    startDate?: string,
+    endDate?: string,
+    contactId?: string,
+    page = 1,
+    limit = 20,
+  ) {
+    const skip = (page - 1) * limit;
+    const where: Prisma.InvoiceWhereInput = {
+      companyId: company.id,
+      ...(status ? { status } : {}),
+      ...(contactId ? { contactId } : {}),
+      ...(startDate || endDate
+        ? {
+            issueDate: {
+              ...(startDate ? { gte: new Date(startDate) } : {}),
+              ...(endDate ? { lte: new Date(endDate) } : {}),
+            },
+          }
+        : {}),
+      ...(search
+        ? {
+            OR: [
+              { invoiceNumber: { contains: search, mode: 'insensitive' } },
+              { clientName: { contains: search, mode: 'insensitive' } },
+              { clientEmail: { contains: search, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    };
+
+    const [data, total] = await Promise.all([
+      this.prisma.invoice.findMany({
+        where,
+        include: { items: true, contact: { select: { id: true, name: true, type: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.invoice.count({ where }),
+    ]);
+
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  async findById(companyId: string, id: string) {
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { id, companyId },
+      include: { items: true, contact: true, attachments: true, paymentBankAccount: true },
+    });
+    if (!invoice) throw new NotFoundException('Invoice not found.');
+    return invoice;
+  }
+
+  async create(userId: string, company: Company, dto: CreateInvoiceDto) {
+    let clientName = dto.clientName ?? '';
+    let clientEmail = dto.clientEmail ?? null;
+    let clientAddress = dto.clientAddress ?? null;
+
+    if (dto.contactId) {
+      const contact = await this.prisma.contact.findFirst({
+        where: { id: dto.contactId, companyId: company.id },
+      });
+      if (!contact) throw new NotFoundException('Contact not found in this company.');
+      clientName = contact.name;
+      clientEmail = contact.email ?? null;
+      clientAddress = contact.address ?? null;
+    }
+
+    if (!clientName) {
+      throw new BadRequestException('clientName is required when contactId is not provided.');
+    }
+
+    if (dto.paymentBankAccountId) {
+      const bankAccount = await this.prisma.companyBankAccount.findFirst({
+        where: { id: dto.paymentBankAccountId, companyId: company.id },
+      });
+      if (!bankAccount) throw new NotFoundException('Bank account not found in this company.');
+    }
+
+    const taxRate = new Prisma.Decimal(company.taxRate.toString());
+    const computedItems = this.computeItems(dto.items, company.taxEnabled, taxRate);
+    const { subtotal, taxAmount, totalAmount } = this.computeTotals(computedItems);
+    const invoiceNumber = await this.generateInvoiceNumber(company.id);
+
+    const invoice = await this.prisma.invoice.create({
+      data: {
+        companyId: company.id,
+        contactId: dto.contactId ?? null,
+        invoiceNumber,
+        clientName,
+        clientEmail,
+        clientAddress,
+        issueDate: new Date(dto.issueDate),
+        dueDate: new Date(dto.dueDate),
+        status: InvoiceStatus.DRAFT,
+        subtotal,
+        taxAmount,
+        totalAmount,
+        notes: dto.notes ?? null,
+        paymentBankAccountId: dto.paymentBankAccountId ?? null,
+        createdByUserId: userId,
+        items: {
+          create: computedItems.map((i) => ({
+            description: i.description,
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+            discountAmount: i.discountAmount,
+            taxable: i.taxable,
+            taxRate: i.taxRate,
+            taxAmount: i.taxAmount,
+            total: i.total,
+          })),
+        },
+      },
+      include: { items: true },
+    });
+
+    await this.logsService.create({
+      userId,
+      actionType: LogActionType.BUSINESS_INVOICE_CREATE,
+      entityType: 'Invoice',
+      entityId: invoice.id,
+      description: `Invoice ${invoiceNumber} created (DRAFT) for company "${company.name}".`,
+      details: null,
+    });
+
+    return invoice;
+  }
+
+  async update(_userId: string, companyId: string, id: string, dto: UpdateInvoiceDto) {
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { id, companyId },
+      include: { company: true },
+    });
+    if (!invoice) throw new NotFoundException('Invoice not found.');
+    if (invoice.status !== InvoiceStatus.DRAFT) {
+      throw new BadRequestException('Only DRAFT invoices can be edited.');
+    }
+
+    let clientName: string | undefined = dto.clientName;
+    let clientEmail: string | null | undefined = dto.clientEmail;
+    let clientAddress: string | null | undefined = dto.clientAddress;
+
+    if (dto.contactId) {
+      const contact = await this.prisma.contact.findFirst({
+        where: { id: dto.contactId, companyId },
+      });
+      if (!contact) throw new NotFoundException('Contact not found in this company.');
+      clientName = contact.name;
+      clientEmail = contact.email ?? null;
+      clientAddress = contact.address ?? null;
+    }
+
+    if (dto.paymentBankAccountId) {
+      const bankAccount = await this.prisma.companyBankAccount.findFirst({
+        where: { id: dto.paymentBankAccountId, companyId },
+      });
+      if (!bankAccount) throw new NotFoundException('Bank account not found in this company.');
+    }
+
+    const company = invoice.company;
+    const taxRate = new Prisma.Decimal(company.taxRate.toString());
+
+    let subtotal: Prisma.Decimal | undefined;
+    let taxAmount: Prisma.Decimal | undefined;
+    let totalAmount: Prisma.Decimal | undefined;
+    let itemUpdates: Prisma.InvoiceUpdateInput['items'] | undefined;
+
+    if (dto.items) {
+      const computedItems = this.computeItems(
+        dto.items.map((i) => ({
+          description: i.description ?? '',
+          quantity: i.quantity ?? 1,
+          unitPrice: i.unitPrice ?? 0,
+          taxable: i.taxable,
+          discountAmount: i.discountAmount,
+        })),
+        company.taxEnabled,
+        taxRate,
+      );
+
+      const totals = this.computeTotals(computedItems);
+      subtotal = totals.subtotal;
+      taxAmount = totals.taxAmount;
+      totalAmount = totals.totalAmount;
+
+      itemUpdates = {
+        deleteMany: {},
+        create: computedItems.map((i) => ({
+          description: i.description,
+          quantity: i.quantity,
+          unitPrice: i.unitPrice,
+          discountAmount: i.discountAmount,
+          taxable: i.taxable,
+          taxRate: i.taxRate,
+          taxAmount: i.taxAmount,
+          total: i.total,
+        })),
+      };
+    }
+
+    const updated = await this.prisma.invoice.update({
+      where: { id },
+      data: {
+        contactId: dto.contactId !== undefined ? (dto.contactId ?? null) : undefined,
+        clientName,
+        clientEmail,
+        clientAddress,
+        issueDate: dto.issueDate ? new Date(dto.issueDate) : undefined,
+        dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+        notes: dto.notes !== undefined ? (dto.notes ?? null) : undefined,
+        paymentBankAccountId: dto.paymentBankAccountId !== undefined ? (dto.paymentBankAccountId ?? null) : undefined,
+        subtotal,
+        taxAmount,
+        totalAmount,
+        items: itemUpdates,
+      },
+      include: { items: true },
+    });
+
+    return updated;
+  }
+
+  async send(userId: string, companyId: string, id: string) {
+    const invoice = await this.prisma.invoice.findFirst({ where: { id, companyId } });
+    if (!invoice) throw new NotFoundException('Invoice not found.');
+    if (invoice.status !== InvoiceStatus.DRAFT) {
+      throw new BadRequestException('Only DRAFT invoices can be sent.');
+    }
+
+    const now = new Date();
+    const updated = await this.prisma.invoice.update({
+      where: { id },
+      data: { status: InvoiceStatus.SENT, sentAt: now },
+    });
+
+    // Kirim email ke clientEmail jika ada
+    if (invoice.clientEmail) {
+      try {
+        const resend = new Resend(process.env.RESEND_API_KEY);
+        const from = (process.env.SMTP_FROM || 'Moneytory <noreply@moneytory.com>').replace(
+          /^["']|["']$/g,
+          '',
+        );
+        const dueDateStr = invoice.dueDate.toLocaleDateString('id-ID', {
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric',
+        });
+        await resend.emails.send({
+          from,
+          to: invoice.clientEmail,
+          subject: `Invoice ${invoice.invoiceNumber} dari ${invoice.clientName}`,
+          html: `
+            <p>Halo ${invoice.clientName},</p>
+            <p>Invoice <strong>${invoice.invoiceNumber}</strong> telah dikirimkan kepada Anda.</p>
+            <ul>
+              <li>Total: <strong>Rp ${Number(invoice.totalAmount).toLocaleString('id-ID')}</strong></li>
+              <li>Jatuh tempo: <strong>${dueDateStr}</strong></li>
+            </ul>
+            ${invoice.notes ? `<p>Catatan: ${invoice.notes}</p>` : ''}
+            <p>Terima kasih.</p>
+          `,
+        });
+      } catch (err) {
+        this.logger.warn(`Failed to send invoice email for ${invoice.invoiceNumber}: ${err}`);
+      }
+    }
+
+    await this.logsService.create({
+      userId,
+      actionType: LogActionType.BUSINESS_INVOICE_SENT,
+      entityType: 'Invoice',
+      entityId: id,
+      description: `Invoice ${invoice.invoiceNumber} marked as SENT.`,
+      details: null,
+    });
+
+    return updated;
+  }
+
+  async pay(userId: string, companyId: string, id: string, dto: PayInvoiceDto) {
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { id, companyId },
+      include: { company: true },
+    });
+    if (!invoice) throw new NotFoundException('Invoice not found.');
+    if (invoice.status !== InvoiceStatus.SENT && invoice.status !== InvoiceStatus.OVERDUE) {
+      throw new BadRequestException('Only SENT or OVERDUE invoices can be paid.');
+    }
+
+    const paymentCoa = await this.prisma.chartOfAccount.findFirst({
+      where: { id: dto.paymentCoaId, companyId },
+    });
+    if (!paymentCoa) throw new NotFoundException('Payment COA not found in this company.');
+
+    const revenueCoa = await this.prisma.chartOfAccount.findFirst({
+      where: { companyId, code: '4-001' },
+    });
+    if (!revenueCoa) {
+      throw new NotFoundException('Revenue COA (4-001) not found. Please ensure default COA is set up.');
+    }
+
+    // Hitung sisa yang belum dibayar
+    const totalAmount = new Prisma.Decimal(invoice.totalAmount.toString());
+    const alreadyPaid = new Prisma.Decimal(invoice.amountPaid.toString());
+    const remaining = totalAmount.sub(alreadyPaid);
+
+    // Jumlah yang dibayar sekarang: jika dto.amount ada, gunakan itu; jika tidak, bayar penuh sisa
+    const payNow = dto.amount
+      ? new Prisma.Decimal(dto.amount)
+      : remaining;
+
+    if (payNow.lte(0)) {
+      throw new BadRequestException('Payment amount must be greater than 0.');
+    }
+    if (payNow.gt(remaining)) {
+      throw new BadRequestException(
+        `Payment amount (${payNow}) exceeds remaining balance (${remaining}).`,
+      );
+    }
+
+    const newAmountPaid = alreadyPaid.add(payNow);
+    const isFullyPaid = newAmountPaid.gte(totalAmount);
+    const paymentDate = new Date(dto.paymentDate);
+    const now = new Date();
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.invoice.update({
+        where: { id },
+        data: {
+          amountPaid: newAmountPaid,
+          paymentCoaId: dto.paymentCoaId,
+          paymentDate,
+          paymentMethod: dto.paymentMethod ?? null,
+          paymentReference: dto.paymentReference ?? null,
+          ...(isFullyPaid ? { status: InvoiceStatus.PAID, paidAt: now } : {}),
+        },
+      });
+
+      await tx.businessTransaction.create({
+        data: {
+          companyId,
+          debitCoaId: dto.paymentCoaId,
+          creditCoaId: revenueCoa.id,
+          contactId: invoice.contactId ?? null,
+          invoiceId: id,
+          amount: payNow,
+          description: `Payment for invoice ${invoice.invoiceNumber}${isFullyPaid ? ' (LUNAS)' : ` (partial, sisa ${remaining.sub(payNow)})`}`,
+          transactionDate: paymentDate,
+          createdByUserId: userId,
+        },
+      });
+
+      // Buat jurnal PPN hanya saat lunas penuh
+      if (isFullyPaid) {
+        const taxDecimal = new Prisma.Decimal(invoice.taxAmount.toString());
+        if (taxDecimal.gt(0)) {
+          const taxCoa = await tx.chartOfAccount.findFirst({ where: { companyId, code: '2-002' } });
+          if (taxCoa) {
+            await tx.businessTransaction.create({
+              data: {
+                companyId,
+                debitCoaId: revenueCoa.id,
+                creditCoaId: taxCoa.id,
+                invoiceId: id,
+                amount: invoice.taxAmount,
+                description: `PPN from invoice ${invoice.invoiceNumber}`,
+                transactionDate: paymentDate,
+                createdByUserId: userId,
+              },
+            });
+          }
+        }
+      }
+    });
+
+    await this.logsService.create({
+      userId,
+      actionType: isFullyPaid ? LogActionType.BUSINESS_INVOICE_PAID : LogActionType.BUSINESS_INVOICE_SENT,
+      entityType: 'Invoice',
+      entityId: id,
+      description: isFullyPaid
+        ? `Invoice ${invoice.invoiceNumber} marked as PAID.`
+        : `Invoice ${invoice.invoiceNumber} received partial payment of ${payNow}.`,
+      details: { paymentCoaId: dto.paymentCoaId, paymentDate: dto.paymentDate, amount: payNow.toString() },
+    });
+
+    return isFullyPaid
+      ? { message: `Invoice ${invoice.invoiceNumber} marked as PAID.` }
+      : {
+          message: `Partial payment of ${payNow} recorded. Remaining balance: ${remaining.sub(payNow)}.`,
+          amountPaid: newAmountPaid.toString(),
+          remaining: remaining.sub(payNow).toString(),
+        };
+  }
+
+  async delete(userId: string, companyId: string, id: string) {
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { id, companyId },
+      include: { attachments: true },
+    });
+    if (!invoice) throw new NotFoundException('Invoice not found.');
+    if (invoice.status !== InvoiceStatus.DRAFT) {
+      throw new BadRequestException('Only DRAFT invoices can be deleted.');
+    }
+
+    // Hapus semua attachment dari MinIO
+    for (const att of invoice.attachments) {
+      await this.minioService.deleteFile(att.fileUrl).catch(() => null);
+    }
+
+    await this.prisma.invoice.delete({ where: { id } });
+
+    await this.logsService.create({
+      userId,
+      actionType: LogActionType.BUSINESS_INVOICE_DELETED,
+      entityType: 'Invoice',
+      entityId: id,
+      description: `Invoice ${invoice.invoiceNumber} deleted.`,
+      details: null,
+    });
+
+    return { message: `Invoice ${invoice.invoiceNumber} deleted.` };
+  }
+
+  async duplicate(userId: string, company: Company, id: string) {
+    const source = await this.prisma.invoice.findFirst({
+      where: { id, companyId: company.id },
+      include: { items: true },
+    });
+    if (!source) throw new NotFoundException('Invoice not found.');
+
+    const invoiceNumber = await this.generateInvoiceNumber(company.id);
+    const now = new Date();
+
+    const duplicate = await this.prisma.invoice.create({
+      data: {
+        companyId: company.id,
+        contactId: source.contactId,
+        invoiceNumber,
+        clientName: source.clientName,
+        clientEmail: source.clientEmail,
+        clientAddress: source.clientAddress,
+        issueDate: now,
+        dueDate: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000), // +30 hari
+        status: InvoiceStatus.DRAFT,
+        subtotal: source.subtotal,
+        taxAmount: source.taxAmount,
+        totalAmount: source.totalAmount,
+        notes: source.notes,
+        paymentBankAccountId: source.paymentBankAccountId,
+        createdByUserId: userId,
+        items: {
+          create: source.items.map((i) => ({
+            description: i.description,
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+            discountAmount: i.discountAmount,
+            taxable: i.taxable,
+            taxRate: i.taxRate,
+            taxAmount: i.taxAmount,
+            total: i.total,
+          })),
+        },
+      },
+      include: { items: true },
+    });
+
+    await this.logsService.create({
+      userId,
+      actionType: LogActionType.BUSINESS_INVOICE_CREATE,
+      entityType: 'Invoice',
+      entityId: duplicate.id,
+      description: `Invoice ${duplicate.invoiceNumber} duplicated from ${source.invoiceNumber}.`,
+      details: { sourceInvoiceId: source.id },
+    });
+
+    return duplicate;
+  }
+
+  // ───────────────────────────────────────────────────
+  // Attachments
+  // ───────────────────────────────────────────────────
+
+  async uploadAttachment(
+    userId: string,
+    companyId: string,
+    id: string,
+    file: Express.Multer.File,
+  ) {
+    const invoice = await this.prisma.invoice.findFirst({ where: { id, companyId } });
+    if (!invoice) throw new NotFoundException('Invoice not found.');
+
+    const allowedMimeTypes = [
+      'image/jpeg', 'image/png', 'image/jpg', 'image/webp',
+      'application/pdf',
+    ];
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      throw new BadRequestException(
+        'Invalid file type. Only JPEG, PNG, WebP, and PDF are allowed.',
+      );
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      throw new BadRequestException('File size must not exceed 10MB.');
+    }
+
+    const ext = file.originalname.split('.').pop();
+    const filePath = `invoice-attachments/${companyId}/${id}/${Date.now()}-${randomUUID()}.${ext}`;
+    await this.minioService.uploadFile(file, filePath);
+
+    const attachment = await this.prisma.invoiceAttachment.create({
+      data: {
+        invoiceId: id,
+        fileName: file.originalname,
+        fileUrl: filePath,
+        fileSize: file.size,
+        mimeType: file.mimetype,
+        uploadedByUserId: userId,
+      },
+    });
+
+    return attachment;
+  }
+
+  async getAttachments(companyId: string, id: string) {
+    const invoice = await this.prisma.invoice.findFirst({ where: { id, companyId } });
+    if (!invoice) throw new NotFoundException('Invoice not found.');
+    return this.prisma.invoiceAttachment.findMany({ where: { invoiceId: id } });
+  }
+
+  async deleteAttachment(
+    companyId: string,
+    invoiceId: string,
+    attachmentId: string,
+  ) {
+    const invoice = await this.prisma.invoice.findFirst({ where: { id: invoiceId, companyId } });
+    if (!invoice) throw new NotFoundException('Invoice not found.');
+
+    const attachment = await this.prisma.invoiceAttachment.findFirst({
+      where: { id: attachmentId, invoiceId },
+    });
+    if (!attachment) throw new NotFoundException('Attachment not found.');
+
+    await this.minioService.deleteFile(attachment.fileUrl).catch(() => null);
+    await this.prisma.invoiceAttachment.delete({ where: { id: attachmentId } });
+
+    return { message: 'Attachment deleted.' };
+  }
+}

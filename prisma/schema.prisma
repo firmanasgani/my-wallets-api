@@ -33,8 +33,11 @@ model User {
   FinancialGoals        FinancialGoal[]
 
   // Business relations
-  ownedCompany    Company?        @relation("CompanyOwner")
-  companyMembers  CompanyMember[]
+  ownedCompany         Company?             @relation("CompanyOwner")
+  companyMembers       CompanyMember[]
+  createdInvoices      Invoice[]
+  createdTransactions  BusinessTransaction[]
+  invoiceAttachments   InvoiceAttachment[]  @relation("InvoiceAttachments")
 }
 
 model SubscriptionPlan {
@@ -210,6 +213,13 @@ enum LogActionType {
   BUSINESS_MEMBER_INVITE
   BUSINESS_MEMBER_ROLE_UPDATE
   BUSINESS_MEMBER_REVOKE
+  BUSINESS_INVOICE_CREATE
+  BUSINESS_INVOICE_SENT
+  BUSINESS_INVOICE_PAID
+  BUSINESS_INVOICE_DELETED
+  BUSINESS_CONTACT_CREATE
+  BUSINESS_CONTACT_UPDATE
+  BUSINESS_CONTACT_DELETE
 }
 
 model PaymentTransaction {
@@ -390,8 +400,12 @@ model Company {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  members         CompanyMember[]
-  chartOfAccounts ChartOfAccount[]
+  members             CompanyMember[]
+  chartOfAccounts     ChartOfAccount[]
+  contacts            Contact[]
+  invoices            Invoice[]
+  businessTransactions BusinessTransaction[]
+  bankAccounts        CompanyBankAccount[]
 }
 
 model CompanyMember {
@@ -417,16 +431,180 @@ model CompanyMember {
 }
 
 model ChartOfAccount {
-  id        String             @id @default(uuid())
-  companyId String
-  company   Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  code      String
-  name      String
-  type      ChartOfAccountType
-  isSystem  Boolean            @default(false)
-  createdAt DateTime           @default(now())
-  updatedAt DateTime           @updatedAt
+  id             String             @id @default(uuid())
+  companyId      String
+  company        Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  code           String
+  name           String
+  type           ChartOfAccountType
+  openingBalance Decimal            @default(0) @db.Decimal(18, 2)
+  isSystem       Boolean            @default(false)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  debitTransactions  BusinessTransaction[] @relation("DebitCoa")
+  creditTransactions BusinessTransaction[] @relation("CreditCoa")
 
   @@unique([companyId, code])
   @@index([companyId, type])
+}
+
+// ─────────────────────────────────────────────
+// CONTACT
+// ─────────────────────────────────────────────
+
+enum ContactType {
+  CUSTOMER
+  VENDOR
+  EMPLOYEE
+}
+
+model Contact {
+  id                String      @id @default(uuid())
+  companyId         String
+  company           Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  type              ContactType
+  name              String
+  email             String?
+  phone             String?
+  address           String?
+  bankName          String?
+  bankAccountNumber String?
+  bankAccountHolder String?
+  notes             String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  invoices             Invoice[]
+  businessTransactions BusinessTransaction[]
+
+  @@index([companyId, type])
+}
+
+// ─────────────────────────────────────────────
+// COMPANY BANK ACCOUNT
+// ─────────────────────────────────────────────
+
+model CompanyBankAccount {
+  id            String   @id @default(uuid())
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  bankName      String
+  accountNumber String
+  accountHolder String
+  isDefault     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  invoices      Invoice[]
+
+  @@index([companyId])
+}
+
+// ─────────────────────────────────────────────
+// INVOICE
+// ─────────────────────────────────────────────
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+}
+
+model Invoice {
+  id               String        @id @default(uuid())
+  companyId        String
+  company          Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contactId        String?
+  contact          Contact?      @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  invoiceNumber    String
+  clientName       String
+  clientEmail      String?
+  clientAddress    String?
+  issueDate        DateTime
+  dueDate          DateTime
+  status           InvoiceStatus @default(DRAFT)
+  subtotal         Decimal       @db.Decimal(18, 2)
+  taxAmount        Decimal       @default(0) @db.Decimal(18, 2)
+  totalAmount      Decimal       @db.Decimal(18, 2)
+  amountPaid       Decimal       @default(0) @db.Decimal(18, 2)
+  notes            String?
+  sentAt           DateTime?
+  paidAt           DateTime?
+  paymentDate             DateTime?
+  paymentCoaId            String?
+  paymentMethod           String?
+  paymentReference        String?
+  paymentBankAccountId    String?
+  paymentBankAccount      CompanyBankAccount? @relation(fields: [paymentBankAccountId], references: [id], onDelete: SetNull)
+  createdByUserId  String
+  createdBy        User          @relation(fields: [createdByUserId], references: [id])
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  items                InvoiceItem[]
+  attachments          InvoiceAttachment[]
+  businessTransactions BusinessTransaction[]
+
+  @@unique([companyId, invoiceNumber])
+  @@index([companyId, status])
+}
+
+model InvoiceItem {
+  id             String   @id @default(uuid())
+  invoiceId      String
+  invoice        Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description    String
+  quantity       Decimal  @db.Decimal(18, 4)
+  unitPrice      Decimal  @db.Decimal(18, 2)
+  discountAmount Decimal  @default(0) @db.Decimal(18, 2)
+  taxable        Boolean  @default(false)
+  taxRate        Decimal  @default(0) @db.Decimal(5, 2)
+  taxAmount      Decimal  @default(0) @db.Decimal(18, 2)
+  total          Decimal  @db.Decimal(18, 2)
+
+  @@index([invoiceId])
+}
+
+model InvoiceAttachment {
+  id               String   @id @default(uuid())
+  invoiceId        String
+  invoice          Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  fileName         String
+  fileUrl          String
+  fileSize         Int
+  mimeType         String
+  uploadedByUserId String
+  uploadedBy       User     @relation("InvoiceAttachments", fields: [uploadedByUserId], references: [id])
+  createdAt        DateTime @default(now())
+
+  @@index([invoiceId])
+}
+
+// ─────────────────────────────────────────────
+// BUSINESS TRANSACTION (double-entry)
+// ─────────────────────────────────────────────
+
+model BusinessTransaction {
+  id              String         @id @default(uuid())
+  companyId       String
+  company         Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  debitCoaId      String
+  debitCoa        ChartOfAccount @relation("DebitCoa", fields: [debitCoaId], references: [id])
+  creditCoaId     String
+  creditCoa       ChartOfAccount @relation("CreditCoa", fields: [creditCoaId], references: [id])
+  contactId       String?
+  contact         Contact?       @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  invoiceId       String?
+  invoice         Invoice?       @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  amount          Decimal        @db.Decimal(18, 2)
+  description     String
+  transactionDate DateTime
+  createdByUserId String
+  createdBy       User           @relation(fields: [createdByUserId], references: [id])
+  createdAt       DateTime       @default(now())
+
+  @@index([companyId, transactionDate])
+  @@index([invoiceId])
 }
