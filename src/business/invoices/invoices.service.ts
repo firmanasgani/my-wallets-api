@@ -446,41 +446,67 @@ export class InvoicesService {
         },
       });
 
-      await tx.businessTransaction.create({
-        data: {
-          companyId,
-          debitCoaId: dto.paymentCoaId,
-          creditCoaId: revenueCoa.id,
-          contactId: invoice.contactId ?? null,
-          invoiceId: id,
+      // Jurnal pembayaran invoice: Debit Kas/Bank, Credit Pendapatan
+      // Jika lunas penuh dan ada PPN: tambahkan baris Debit Pendapatan, Credit Utang PPN
+      const journalLines: {
+        coaId: string;
+        type: 'DEBIT' | 'CREDIT';
+        amount: Prisma.Decimal;
+        description: string;
+        contactId: string | null;
+      }[] = [
+        {
+          coaId: dto.paymentCoaId,
+          type: 'DEBIT',
           amount: payNow,
-          description: `Payment for invoice ${invoice.invoiceNumber}${isFullyPaid ? ' (LUNAS)' : ` (partial, sisa ${remaining.sub(payNow)})`}`,
-          transactionDate: paymentDate,
-          createdByUserId: userId,
+          description: `Penerimaan dari invoice ${invoice.invoiceNumber}`,
+          contactId: invoice.contactId ?? null,
         },
-      });
+        {
+          coaId: revenueCoa.id,
+          type: 'CREDIT',
+          amount: payNow,
+          description: `Pendapatan dari invoice ${invoice.invoiceNumber}`,
+          contactId: invoice.contactId ?? null,
+        },
+      ];
 
-      // Buat jurnal PPN hanya saat lunas penuh
       if (isFullyPaid) {
         const taxDecimal = new Prisma.Decimal(invoice.taxAmount.toString());
         if (taxDecimal.gt(0)) {
           const taxCoa = await tx.chartOfAccount.findFirst({ where: { companyId, code: '2-002' } });
           if (taxCoa) {
-            await tx.businessTransaction.create({
-              data: {
-                companyId,
-                debitCoaId: revenueCoa.id,
-                creditCoaId: taxCoa.id,
-                invoiceId: id,
-                amount: invoice.taxAmount,
-                description: `PPN from invoice ${invoice.invoiceNumber}`,
-                transactionDate: paymentDate,
-                createdByUserId: userId,
+            journalLines.push(
+              {
+                coaId: revenueCoa.id,
+                type: 'DEBIT',
+                amount: taxDecimal,
+                description: `PPN dari invoice ${invoice.invoiceNumber}`,
+                contactId: null,
               },
-            });
+              {
+                coaId: taxCoa.id,
+                type: 'CREDIT',
+                amount: taxDecimal,
+                description: `Utang PPN invoice ${invoice.invoiceNumber}`,
+                contactId: null,
+              },
+            );
           }
         }
       }
+
+      await tx.journalEntry.create({
+        data: {
+          companyId,
+          invoiceId: id,
+          isSystemGenerated: true,
+          description: `Payment for invoice ${invoice.invoiceNumber}${isFullyPaid ? ' (LUNAS)' : ` (partial, sisa ${remaining.sub(payNow)})`}`,
+          transactionDate: paymentDate,
+          createdByUserId: userId,
+          lines: { create: journalLines },
+        },
+      });
     });
 
     await this.logsService.create({

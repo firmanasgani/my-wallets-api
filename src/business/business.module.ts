@@ -5,6 +5,7 @@ import { MembersModule } from './members/members.module';
 import { ContactsModule } from './contacts/contacts.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { CompanyBankAccountsModule } from './company-bank-accounts/company-bank-accounts.module';
+import { TransactionsModule } from './transactions/transactions.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { CompanyBankAccountsModule } from './company-bank-accounts/company-bank-
     ContactsModule,
     InvoicesModule,
     CompanyBankAccountsModule,
+    TransactionsModule,
   ],
 })
 export class BusinessModule {}

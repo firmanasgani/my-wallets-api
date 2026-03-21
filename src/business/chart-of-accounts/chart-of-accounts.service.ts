@@ -86,11 +86,9 @@ export class ChartOfAccountsService {
       throw new ForbiddenException('System accounts cannot be deleted.');
     }
 
-    // Guard: tidak bisa hapus jika sudah ada BusinessTransaction yang mereferensikan
-    const txCount = await this.prisma.businessTransaction.count({
-      where: {
-        OR: [{ debitCoaId: id }, { creditCoaId: id }],
-      },
+    // Guard: tidak bisa hapus jika sudah ada JournalLine yang mereferensikan
+    const txCount = await this.prisma.journalLine.count({
+      where: { coaId: id },
     });
     if (txCount > 0) {
       throw new BadRequestException(

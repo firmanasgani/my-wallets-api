@@ -111,7 +111,7 @@ export class ContactsService {
       );
     }
 
-    const txCount = await this.prisma.businessTransaction.count({ where: { contactId: id } });
+    const txCount = await this.prisma.journalLine.count({ where: { contactId: id } });
     if (txCount > 0) {
       throw new BadRequestException(
         'Cannot delete contact because it is referenced by existing transactions.',

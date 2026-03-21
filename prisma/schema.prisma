@@ -33,11 +33,11 @@ model User {
   FinancialGoals        FinancialGoal[]
 
   // Business relations
-  ownedCompany         Company?             @relation("CompanyOwner")
-  companyMembers       CompanyMember[]
-  createdInvoices      Invoice[]
-  createdTransactions  BusinessTransaction[]
-  invoiceAttachments   InvoiceAttachment[]  @relation("InvoiceAttachments")
+  ownedCompany           Company?             @relation("CompanyOwner")
+  companyMembers         CompanyMember[]
+  createdInvoices        Invoice[]
+  createdJournalEntries  JournalEntry[]
+  invoiceAttachments     InvoiceAttachment[]  @relation("InvoiceAttachments")
 }
 
 model SubscriptionPlan {
@@ -220,6 +220,8 @@ enum LogActionType {
   BUSINESS_CONTACT_CREATE
   BUSINESS_CONTACT_UPDATE
   BUSINESS_CONTACT_DELETE
+  BUSINESS_JOURNAL_CREATE
+  BUSINESS_JOURNAL_DELETE
 }
 
 model PaymentTransaction {
@@ -404,7 +406,7 @@ model Company {
   chartOfAccounts     ChartOfAccount[]
   contacts            Contact[]
   invoices            Invoice[]
-  businessTransactions BusinessTransaction[]
+  journalEntries      JournalEntry[]
   bankAccounts        CompanyBankAccount[]
 }
 
@@ -442,8 +444,7 @@ model ChartOfAccount {
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
 
-  debitTransactions  BusinessTransaction[] @relation("DebitCoa")
-  creditTransactions BusinessTransaction[] @relation("CreditCoa")
+  journalLines       JournalLine[]
 
   @@unique([companyId, code])
   @@index([companyId, type])
@@ -475,8 +476,8 @@ model Contact {
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
 
-  invoices             Invoice[]
-  businessTransactions BusinessTransaction[]
+  invoices     Invoice[]
+  journalLines JournalLine[]
 
   @@index([companyId, type])
 }
@@ -543,9 +544,9 @@ model Invoice {
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
-  items                InvoiceItem[]
-  attachments          InvoiceAttachment[]
-  businessTransactions BusinessTransaction[]
+  items          InvoiceItem[]
+  attachments    InvoiceAttachment[]
+  journalEntries JournalEntry[]
 
   @@unique([companyId, invoiceNumber])
   @@index([companyId, status])
@@ -583,28 +584,45 @@ model InvoiceAttachment {
 }
 
 // ─────────────────────────────────────────────
-// BUSINESS TRANSACTION (double-entry)
+// JOURNAL ENTRY (double-entry, compound)
 // ─────────────────────────────────────────────
 
-model BusinessTransaction {
-  id              String         @id @default(uuid())
-  companyId       String
-  company         Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  debitCoaId      String
-  debitCoa        ChartOfAccount @relation("DebitCoa", fields: [debitCoaId], references: [id])
-  creditCoaId     String
-  creditCoa       ChartOfAccount @relation("CreditCoa", fields: [creditCoaId], references: [id])
-  contactId       String?
-  contact         Contact?       @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  invoiceId       String?
-  invoice         Invoice?       @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  amount          Decimal        @db.Decimal(18, 2)
-  description     String
-  transactionDate DateTime
-  createdByUserId String
-  createdBy       User           @relation(fields: [createdByUserId], references: [id])
-  createdAt       DateTime       @default(now())
+enum JournalLineType {
+  DEBIT
+  CREDIT
+}
+
+model JournalEntry {
+  id                String        @id @default(uuid())
+  companyId         String
+  company           Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  description       String
+  transactionDate   DateTime
+  isSystemGenerated Boolean       @default(false)
+  invoiceId         String?
+  invoice           Invoice?      @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  createdByUserId   String
+  createdBy         User          @relation(fields: [createdByUserId], references: [id])
+  createdAt         DateTime      @default(now())
+
+  lines             JournalLine[]
 
   @@index([companyId, transactionDate])
   @@index([invoiceId])
+}
+
+model JournalLine {
+  id             String          @id @default(uuid())
+  journalEntryId String
+  journalEntry   JournalEntry    @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  coaId          String
+  coa            ChartOfAccount  @relation(fields: [coaId], references: [id])
+  contactId      String?
+  contact        Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  type           JournalLineType
+  amount         Decimal         @db.Decimal(18, 2)
+  description    String?
+
+  @@index([journalEntryId])
+  @@index([coaId])
 }
