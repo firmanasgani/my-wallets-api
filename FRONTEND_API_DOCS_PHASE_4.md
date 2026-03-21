@@ -27,18 +27,32 @@ Sama seperti Phase 1, 2, & 3:
 
 ---
 
+## Perubahan Model dari MVP Plan
+
+> **Catatan implementasi:** Model `BusinessTransaction` (1 debit + 1 credit) di `BUSINESS_MVP_PLAN.md` section 3.7 **digantikan** dengan struktur compound berikut:
+>
+> | Model | Deskripsi |
+> |-------|-----------|
+> | `JournalEntry` | Header transaksi (description, date, invoiceId, isSystemGenerated) |
+> | `JournalLine` | Baris detail: 1 baris = 1 akun COA + type DEBIT/CREDIT + amount |
+>
+> Satu `JournalEntry` memiliki **minimal 2 `JournalLine`** (1 DEBIT + 1 CREDIT), dan bisa lebih (compound entry).
+
+---
+
 ## Konsep: Compound Double-Entry Bookkeeping
 
 Implementasi Phase 4 menggunakan **Compound Journal Entry**, bukan simple 1-debit-1-credit.
 
 ### Perbedaan Simple vs Compound
 
-| | Simple (docs lama) | Compound (implementasi aktual) |
+| | Simple (MVP Plan awal) | Compound (implementasi aktual) |
 |--|--------------------|---------------------------------|
 | Struktur | 1 debit + 1 credit | N debit + N credit |
 | Bayar gaji 1 orang | ✅ | ✅ |
 | Bayar gaji 3 orang dari 2 rekening berbeda | ❌ | ✅ |
 | Invoice dengan diskon (split akun) | ❌ | ✅ |
+| Invoice lunas dengan PPN (4 baris jurnal) | ❌ | ✅ |
 
 **Aturan wajib:** `Σ semua baris DEBIT = Σ semua baris CREDIT`
 
@@ -68,12 +82,60 @@ JournalEntry (header)          → satu entri per transaksi
 
 ---
 
+## Jurnal Otomatis dari Pembayaran Invoice
+
+Saat endpoint `POST /business/invoices/:id/pay` dipanggil (Phase 3), server **otomatis membuat satu `JournalEntry`** dengan `isSystemGenerated: true`. Struktur jurnal tergantung apakah pembayaran lunas dan apakah ada PPN.
+
+### Kasus 1: Pembayaran Tanpa PPN (atau PPN = 0)
+
+```
+Debit  : [paymentCoaId] Bank/Kas               Rp X   (penerimaan dari invoice)
+Credit : [4-001] Pendapatan Penjualan           Rp X
+```
+
+### Kasus 2: Pembayaran Parsial (Belum Lunas)
+
+Jurnal dibuat sama seperti Kasus 1, namun invoice tetap berstatus `SENT` / `OVERDUE`. Jurnal PPN **tidak dibuat** karena invoice belum lunas.
+
+```
+Debit  : [paymentCoaId] Bank/Kas               Rp X   (jumlah yang dibayar sekarang)
+Credit : [4-001] Pendapatan Penjualan           Rp X
+```
+
+### Kasus 3: Pelunasan Penuh dengan PPN (`taxAmount > 0`)
+
+Server membuat **satu JournalEntry dengan 4 baris** dalam satu transaksi atomik:
+
+```
+Debit  : [paymentCoaId] Bank/Kas               Rp Total   (penerimaan kas)
+Credit : [4-001] Pendapatan Penjualan           Rp Total   (pengakuan pendapatan)
+Debit  : [4-001] Pendapatan Penjualan           Rp PPN     (koreksi pendapatan → reklasifikasi PPN)
+Credit : [2-002] Hutang Pajak PPN               Rp PPN     (kewajiban pajak timbul)
+```
+
+> **Logika reklasifikasi PPN:** Pendapatan yang diakui adalah pendapatan *neto* (sudah dikurangi PPN). Baris 3 dan 4 memindahkan porsi PPN dari Pendapatan ke Utang Pajak, sehingga saldo `4-001` mencerminkan pendapatan bersih (di luar PPN).
+
+**Contoh angka** — Invoice Rp 5.000.000 + PPN 11% = Total Rp 5.550.000:
+
+```
+Debit  : 1-002 Bank                   Rp 5.550.000
+Credit : 4-001 Pendapatan Penjualan   Rp 5.550.000
+Debit  : 4-001 Pendapatan Penjualan   Rp   550.000
+Credit : 2-002 Hutang Pajak PPN       Rp   550.000
+─────────────────────────────────────────────────
+Total Debit  : Rp 6.100.000  ✓ Balance  Total Credit : Rp 6.100.000
+```
+
+**Kondisi jurnal PPN dibuat:** hanya saat invoice **lunas penuh** (`amountPaid >= totalAmount`) **dan** `invoice.taxAmount > 0` **dan** COA `2-002` ada di company.
+
+---
+
 ## Sumber Transaksi
 
 | `isSystemGenerated` | `invoiceId` | Sumber | Bisa Dihapus Manual? |
 |:-------------------:|:-----------:|--------|:--------------------:|
 | `false` | `null` | Input manual (Phase 4) | ✅ |
-| `true` | terisi | Otomatis dari invoice PAID | ❌ |
+| `true` | terisi | Otomatis dari invoice (pembayaran penuh/parsial) | ❌ |
 
 > Gunakan field `isSystemGenerated` di response untuk membedakan jurnal manual vs otomatis. Sembunyikan/nonaktifkan tombol Delete jika `isSystemGenerated === true`.
 
@@ -247,6 +309,8 @@ JournalEntry (header)          → satu entri per transaksi
 ---
 
 ## 2. Panduan: Buku Besar per COA
+
+> **Catatan implementasi:** MVP Plan section 8 mendefinisikan endpoint server-side `GET /business/chart-of-accounts/:id/ledger`. Endpoint tersebut **tidak diimplementasikan** — sebagai gantinya, Buku Besar dibangun di sisi frontend menggunakan filter `coaId` pada endpoint transactions. Pendekatan ini lebih fleksibel karena frontend bisa mengatur pagination, range tanggal, dan tampilan saldo berjalan secara mandiri.
 
 Fitur **Buku Besar** (General Ledger) menampilkan riwayat pergerakan saldo suatu akun COA. Implementasikan di frontend menggunakan endpoint `GET /business/transactions` dengan filter `coaId`.
 
@@ -485,8 +549,26 @@ UI mendukung penambahan baris dinamis (compound entry):
    GET /business/transactions?coaId=<id 1-002>&startDate=2026-03-01&endDate=2026-03-31
    → Iterasi entry.lines per entry, cari baris dengan coaId cocok
    → Hitung saldo berjalan dari openingBalance + setiap entry
+
+6. Pembayaran parsial invoice (Rp 3.000.000 dari total Rp 5.550.000)
+   POST /business/invoices/:id/pay
+   → { paymentCoaId: "<id 1-002>", paymentDate: "2026-03-25", amount: 3000000 }
+   ← Server otomatis buat JournalEntry (isSystemGenerated: true):
+      Debit  : 1-002 Bank                   Rp 3.000.000
+      Credit : 4-001 Pendapatan Penjualan   Rp 3.000.000
+   ← Invoice status tetap SENT, amountPaid = 3.000.000, remaining = 2.550.000
+
+7. Pelunasan invoice dengan PPN (sisa Rp 2.550.000)
+   POST /business/invoices/:id/pay
+   → { paymentCoaId: "<id 1-002>", paymentDate: "2026-03-30" }  ← tanpa amount = bayar sisa
+   ← Server otomatis buat JournalEntry (isSystemGenerated: true, 4 baris):
+      Debit  : 1-002 Bank                   Rp 2.550.000   (penerimaan sisa)
+      Credit : 4-001 Pendapatan Penjualan   Rp 2.550.000
+      Debit  : 4-001 Pendapatan Penjualan   Rp   550.000   (reklasifikasi PPN)
+      Credit : 2-002 Hutang Pajak PPN       Rp   550.000
+   ← Invoice status → PAID
 ```
 
 ---
 
-*End of Document — Phase 4 Frontend API Docs — v2.0 (Compound Journal) — 2026-03-20*
+*End of Document — Phase 4 Frontend API Docs — v2.1 (Tax Auto-Journal + Partial Payment) — 2026-03-21*

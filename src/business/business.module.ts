@@ -6,6 +6,7 @@ import { ContactsModule } from './contacts/contacts.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { CompanyBankAccountsModule } from './company-bank-accounts/company-bank-accounts.module';
 import { TransactionsModule } from './transactions/transactions.module';
+import { FinancialReportsModule } from './financial-reports/financial-reports.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { TransactionsModule } from './transactions/transactions.module';
     InvoicesModule,
     CompanyBankAccountsModule,
     TransactionsModule,
+    FinancialReportsModule,
   ],
 })
 export class BusinessModule {}
