@@ -13,10 +13,14 @@ import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { PayInvoiceDto } from './dto/pay-invoice.dto';
 import { randomUUID } from 'crypto';
 import { Resend } from 'resend';
+import { buildInvoiceEmailHtml } from './invoice-email.template';
+
+const EMAIL_COOLDOWN_MS = 10 * 60 * 1000; // 10 menit
 
 @Injectable()
 export class InvoicesService {
   private readonly logger = new Logger(InvoicesService.name);
+  private readonly emailCooldown = new Map<string, Date>();
 
   constructor(
     private prisma: PrismaService,
@@ -330,7 +334,14 @@ export class InvoicesService {
   }
 
   async send(userId: string, companyId: string, id: string) {
-    const invoice = await this.prisma.invoice.findFirst({ where: { id, companyId } });
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { id, companyId },
+      include: {
+        company: true,
+        items: true,
+        paymentBankAccount: true,
+      },
+    });
     if (!invoice) throw new NotFoundException('Invoice not found.');
     if (invoice.status !== InvoiceStatus.DRAFT) {
       throw new BadRequestException('Only DRAFT invoices can be sent.');
@@ -350,26 +361,38 @@ export class InvoicesService {
           /^["']|["']$/g,
           '',
         );
-        const dueDateStr = invoice.dueDate.toLocaleDateString('id-ID', {
-          day: 'numeric',
-          month: 'long',
-          year: 'numeric',
+
+        const html = buildInvoiceEmailHtml({
+          companyName: invoice.company.name,
+          companyAddress: invoice.company.address,
+          companyPhone: invoice.company.phone,
+          companyEmail: invoice.company.email,
+          invoiceNumber: invoice.invoiceNumber,
+          status: InvoiceStatus.SENT,
+          issueDate: invoice.issueDate,
+          dueDate: invoice.dueDate,
+          clientName: invoice.clientName,
+          clientEmail: invoice.clientEmail,
+          clientAddress: invoice.clientAddress,
+          subtotal: invoice.subtotal,
+          taxAmount: invoice.taxAmount,
+          totalAmount: invoice.totalAmount,
+          amountPaid: invoice.amountPaid,
+          notes: invoice.notes,
+          items: invoice.items,
+          bankName: invoice.paymentBankAccount?.bankName ?? null,
+          bankAccountNumber: invoice.paymentBankAccount?.accountNumber ?? null,
+          bankAccountHolder: invoice.paymentBankAccount?.accountHolder ?? null,
         });
+
         await resend.emails.send({
           from,
           to: invoice.clientEmail,
-          subject: `Invoice ${invoice.invoiceNumber} dari ${invoice.clientName}`,
-          html: `
-            <p>Halo ${invoice.clientName},</p>
-            <p>Invoice <strong>${invoice.invoiceNumber}</strong> telah dikirimkan kepada Anda.</p>
-            <ul>
-              <li>Total: <strong>Rp ${Number(invoice.totalAmount).toLocaleString('id-ID')}</strong></li>
-              <li>Jatuh tempo: <strong>${dueDateStr}</strong></li>
-            </ul>
-            ${invoice.notes ? `<p>Catatan: ${invoice.notes}</p>` : ''}
-            <p>Terima kasih.</p>
-          `,
+          subject: `Invoice ${invoice.invoiceNumber} dari ${invoice.company.name}`,
+          html,
         });
+
+        this.emailCooldown.set(id, now);
       } catch (err) {
         this.logger.warn(`Failed to send invoice email for ${invoice.invoiceNumber}: ${err}`);
       }
@@ -385,6 +408,86 @@ export class InvoicesService {
     });
 
     return updated;
+  }
+
+  async sendEmail(userId: string, companyId: string, id: string) {
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { id, companyId },
+      include: {
+        company: true,
+        items: true,
+        paymentBankAccount: true,
+      },
+    });
+    if (!invoice) throw new NotFoundException('Invoice not found.');
+    if (invoice.status === InvoiceStatus.PAID) {
+      throw new BadRequestException('Cannot resend email for a fully paid invoice.');
+    }
+    if (!invoice.clientEmail) {
+      throw new BadRequestException('Invoice does not have a client email address.');
+    }
+
+    const now = new Date();
+    if (invoice.status !== InvoiceStatus.DRAFT) {
+      const lastSent = this.emailCooldown.get(id);
+      if (lastSent && now.getTime() - lastSent.getTime() < EMAIL_COOLDOWN_MS) {
+        const remainingMin = Math.ceil(
+          (EMAIL_COOLDOWN_MS - (now.getTime() - lastSent.getTime())) / 1000 / 60,
+        );
+        throw new BadRequestException(
+          `Email untuk invoice ini baru saja dikirim. Silakan tunggu ${remainingMin} menit lagi.`,
+        );
+      }
+    }
+
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    const from = (process.env.SMTP_FROM || 'Moneytory <noreply@moneytory.com>').replace(
+      /^["']|["']$/g,
+      '',
+    );
+
+    const html = buildInvoiceEmailHtml({
+      companyName: invoice.company.name,
+      companyAddress: invoice.company.address,
+      companyPhone: invoice.company.phone,
+      companyEmail: invoice.company.email,
+      invoiceNumber: invoice.invoiceNumber,
+      status: invoice.status,
+      issueDate: invoice.issueDate,
+      dueDate: invoice.dueDate,
+      clientName: invoice.clientName,
+      clientEmail: invoice.clientEmail,
+      clientAddress: invoice.clientAddress,
+      subtotal: invoice.subtotal,
+      taxAmount: invoice.taxAmount,
+      totalAmount: invoice.totalAmount,
+      amountPaid: invoice.amountPaid,
+      notes: invoice.notes,
+      items: invoice.items,
+      bankName: invoice.paymentBankAccount?.bankName ?? null,
+      bankAccountNumber: invoice.paymentBankAccount?.accountNumber ?? null,
+      bankAccountHolder: invoice.paymentBankAccount?.accountHolder ?? null,
+    });
+
+    await resend.emails.send({
+      from,
+      to: invoice.clientEmail,
+      subject: `Invoice ${invoice.invoiceNumber} dari ${invoice.company.name}`,
+      html,
+    });
+
+    this.emailCooldown.set(id, now);
+
+    await this.logsService.create({
+      userId,
+      actionType: LogActionType.BUSINESS_INVOICE_SENT,
+      entityType: 'Invoice',
+      entityId: id,
+      description: `Invoice ${invoice.invoiceNumber} email resent to ${invoice.clientEmail}.`,
+      details: { status: invoice.status },
+    });
+
+    return { message: `Email invoice ${invoice.invoiceNumber} berhasil dikirim ke ${invoice.clientEmail}.` };
   }
 
   async pay(userId: string, companyId: string, id: string, dto: PayInvoiceDto) {

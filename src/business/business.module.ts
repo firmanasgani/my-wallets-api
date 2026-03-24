@@ -7,6 +7,7 @@ import { InvoicesModule } from './invoices/invoices.module';
 import { CompanyBankAccountsModule } from './company-bank-accounts/company-bank-accounts.module';
 import { TransactionsModule } from './transactions/transactions.module';
 import { FinancialReportsModule } from './financial-reports/financial-reports.module';
+import { KpiModule } from './kpi/kpi.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { FinancialReportsModule } from './financial-reports/financial-reports.mo
     CompanyBankAccountsModule,
     TransactionsModule,
     FinancialReportsModule,
+    KpiModule,
   ],
 })
 export class BusinessModule {}

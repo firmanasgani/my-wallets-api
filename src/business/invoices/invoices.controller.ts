@@ -119,6 +119,17 @@ export class InvoicesController {
     return this.service.pay(user.id, company.id, id, dto);
   }
 
+  @Post(':id/send-email')
+  @HttpCode(HttpStatus.OK)
+  @RequireCompanyRole(CompanyMemberRole.STAFF)
+  sendEmail(
+    @GetUser() user: User,
+    @GetCompany() company: Company,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.service.sendEmail(user.id, company.id, id);
+  }
+
   @Post(':id/duplicate')
   @HttpCode(HttpStatus.CREATED)
   @RequireCompanyRole(CompanyMemberRole.STAFF)

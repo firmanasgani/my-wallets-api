@@ -70,6 +70,28 @@ export class TransactionsService {
     };
   }
 
+  async findOne(company: Company, id: string) {
+    const entry = await this.prisma.journalEntry.findFirst({
+      where: { id, companyId: company.id },
+      include: {
+        lines: {
+          include: {
+            coa: { select: { id: true, code: true, name: true, type: true } },
+            contact: { select: { id: true, name: true, type: true } },
+          },
+          orderBy: [{ type: 'asc' }, { amount: 'desc' }],
+        },
+        invoice: { select: { id: true, invoiceNumber: true } },
+      },
+    });
+
+    if (!entry) {
+      throw new NotFoundException('Journal entry not found.');
+    }
+
+    return entry;
+  }
+
   async create(userId: string, company: Company, dto: CreateJournalEntryDto) {
     this.validateBalance(dto.lines);
 

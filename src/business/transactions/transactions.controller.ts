@@ -36,6 +36,15 @@ export class TransactionsController {
     return this.service.findAll(company, query);
   }
 
+  @Get(':id')
+  @RequireCompanyRole(CompanyMemberRole.VIEWER)
+  findOne(
+    @GetCompany() company: Company,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.service.findOne(company, id);
+  }
+
   @Post()
   @RequireCompanyRole(CompanyMemberRole.STAFF)
   create(
