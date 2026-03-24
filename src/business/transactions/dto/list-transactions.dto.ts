@@ -1,12 +1,14 @@
 import { Type } from 'class-transformer';
 import {
   IsDateString,
+  IsEnum,
   IsInt,
   IsOptional,
   IsUUID,
   Max,
   Min,
 } from 'class-validator';
+import { JournalEntryStatus } from '@prisma/client';
 
 export class ListTransactionsDto {
   @IsOptional()
@@ -24,6 +26,11 @@ export class ListTransactionsDto {
   @IsOptional()
   @IsUUID()
   contactId?: string;
+
+  /** Filter by approval status. Omit to return all statuses. */
+  @IsOptional()
+  @IsEnum(JournalEntryStatus)
+  status?: JournalEntryStatus;
 
   @IsOptional()
   @Type(() => Number)

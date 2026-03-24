@@ -42,4 +42,9 @@ export class UpdateCompanyDto {
   @IsOptional()
   @IsString()
   currency?: string;
+
+  /** Phase 8: enable/disable checker-approver workflow for manual transactions */
+  @IsOptional()
+  @IsBoolean()
+  requiresApprovalWorkflow?: boolean;
 }

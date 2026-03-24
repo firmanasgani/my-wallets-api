@@ -33,11 +33,15 @@ model User {
   FinancialGoals        FinancialGoal[]
 
   // Business relations
-  ownedCompany           Company?             @relation("CompanyOwner")
-  companyMembers         CompanyMember[]
-  createdInvoices        Invoice[]
-  createdJournalEntries  JournalEntry[]
-  invoiceAttachments     InvoiceAttachment[]  @relation("InvoiceAttachments")
+  ownedCompany                 Company?                 @relation("CompanyOwner")
+  companyMembers               CompanyMember[]
+  createdInvoices              Invoice[]
+  createdJournalEntries        JournalEntry[]           @relation("JournalCreator")
+  checkedJournalEntries        JournalEntry[]           @relation("JournalChecker")
+  approvedJournalEntries       JournalEntry[]           @relation("JournalApprover")
+  invoiceAttachments           InvoiceAttachment[]      @relation("InvoiceAttachments")
+  journalEntryAttachments      JournalEntryAttachment[] @relation("JournalEntryUploads")
+  createdAssets                Asset[]
 }
 
 model SubscriptionPlan {
@@ -207,7 +211,7 @@ enum LogActionType {
   PAYMENT_SUCCESS
   PAYMENT_FAILED
 
-  // Business actions
+  // Business — existing
   BUSINESS_COMPANY_CREATE
   BUSINESS_COMPANY_UPDATE
   BUSINESS_MEMBER_INVITE
@@ -224,6 +228,22 @@ enum LogActionType {
   BUSINESS_JOURNAL_DELETE
   BUSINESS_INVOICE_OVERDUE
   BUSINESS_REPORT_EXPORT
+
+  // Business — Phase 8
+  BUSINESS_JOURNAL_SUBMITTED
+  BUSINESS_JOURNAL_CHECKED
+  BUSINESS_JOURNAL_APPROVED
+  BUSINESS_JOURNAL_REJECTED
+  BUSINESS_TAX_CONFIG_CREATE
+  BUSINESS_TAX_CONFIG_UPDATE
+  BUSINESS_TAX_CONFIG_DELETE
+  BUSINESS_SUGGESTION_RULE_CREATE
+  BUSINESS_SUGGESTION_RULE_UPDATE
+  BUSINESS_SUGGESTION_RULE_DELETE
+  BUSINESS_ASSET_CREATE
+  BUSINESS_ASSET_UPDATE
+  BUSINESS_ASSET_DISPOSED
+  BUSINESS_ASSET_DEPRECIATION_RUN
 }
 
 model PaymentTransaction {
@@ -370,6 +390,7 @@ enum GoalLedgerType {
 enum CompanyMemberRole {
   OWNER
   ADMIN
+  CHECKER
   STAFF
   VIEWER
 }
@@ -388,28 +409,80 @@ enum ChartOfAccountType {
   EXPENSE
 }
 
-model Company {
-  id         String   @id @default(uuid())
-  ownerId    String   @unique
-  owner      User     @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  name       String
-  npwp       String?
-  logoUrl    String?
-  address    String?
-  phone      String?
-  email      String?
-  taxEnabled Boolean  @default(true)
-  taxRate    Decimal  @default(11) @db.Decimal(5, 2)
-  currency   String   @default("IDR")
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+// Phase 8: sub-classification for P&L detail
+enum ChartOfAccountSubType {
+  OPERATING
+  NON_OPERATING
+  COGS
+}
 
-  members             CompanyMember[]
-  chartOfAccounts     ChartOfAccount[]
-  contacts            Contact[]
-  invoices            Invoice[]
-  journalEntries      JournalEntry[]
-  bankAccounts        CompanyBankAccount[]
+// Phase 8: journal entry approval workflow
+enum JournalEntryStatus {
+  DRAFT
+  PENDING_CHECK
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+}
+
+// Phase 8: supported withholding tax types
+enum TaxType {
+  PPN
+  PPH_21
+  PPH_22
+  PPH_23
+  PPH_4_2
+  PPH_15
+}
+
+// Phase 8: asset classification
+enum AssetType {
+  TANGIBLE
+  INTANGIBLE
+}
+
+// Phase 8: depreciation / amortisation methods (PSAK 16 & PSAK 19)
+enum DepreciationMethod {
+  STRAIGHT_LINE
+  DECLINING_BALANCE
+  DOUBLE_DECLINING
+  UNITS_OF_PRODUCTION
+}
+
+enum AssetStatus {
+  ACTIVE
+  DISPOSED
+  FULLY_DEPRECIATED
+}
+
+model Company {
+  id                       String   @id @default(uuid())
+  ownerId                  String   @unique
+  owner                    User     @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  name                     String
+  npwp                     String?
+  logoUrl                  String?
+  address                  String?
+  phone                    String?
+  email                    String?
+  taxEnabled               Boolean  @default(true)
+  taxRate                  Decimal  @default(11) @db.Decimal(5, 2)
+  currency                 String   @default("IDR")
+  // Phase 8: approval workflow toggle
+  requiresApprovalWorkflow Boolean  @default(false)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  members         CompanyMember[]
+  chartOfAccounts ChartOfAccount[]
+  contacts        Contact[]
+  invoices        Invoice[]
+  journalEntries  JournalEntry[]
+  bankAccounts    CompanyBankAccount[]
+  // Phase 8
+  taxConfigs      TaxConfig[]
+  taxSuggestionRules TaxSuggestionRule[]
+  assets          Asset[]
 }
 
 model CompanyMember {
@@ -435,21 +508,29 @@ model CompanyMember {
 }
 
 model ChartOfAccount {
-  id             String             @id @default(uuid())
+  id             String                  @id @default(uuid())
   companyId      String
-  company        Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company        Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
   code           String
   name           String
   type           ChartOfAccountType
-  openingBalance Decimal            @default(0) @db.Decimal(18, 2)
-  isSystem       Boolean            @default(false)
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
+  // Phase 8: P&L sub-classification (null = not categorised yet)
+  subType        ChartOfAccountSubType?
+  openingBalance Decimal                 @default(0) @db.Decimal(18, 2)
+  isSystem       Boolean                 @default(false)
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
 
-  journalLines       JournalLine[]
+  journalLines JournalLine[]
+  // Phase 8: asset relations (multiple named to distinguish roles)
+  assetCoa              Asset[] @relation("AssetCoa")
+  accumulatedCoa        Asset[] @relation("AccumulatedCoa")
+  depreciationExpenseCoa Asset[] @relation("DepreciationExpenseCoa")
+  disposalCoa           Asset[] @relation("DisposalCoa")
 
   @@unique([companyId, code])
   @@index([companyId, type])
+  @@index([companyId, subType])
 }
 
 // ─────────────────────────────────────────────
@@ -499,7 +580,7 @@ model CompanyBankAccount {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  invoices      Invoice[]
+  invoices Invoice[]
 
   @@index([companyId])
 }
@@ -516,35 +597,35 @@ enum InvoiceStatus {
 }
 
 model Invoice {
-  id               String        @id @default(uuid())
-  companyId        String
-  company          Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  contactId        String?
-  contact          Contact?      @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  invoiceNumber    String
-  clientName       String
-  clientEmail      String?
-  clientAddress    String?
-  issueDate        DateTime
-  dueDate          DateTime
-  status           InvoiceStatus @default(DRAFT)
-  subtotal         Decimal       @db.Decimal(18, 2)
-  taxAmount        Decimal       @default(0) @db.Decimal(18, 2)
-  totalAmount      Decimal       @db.Decimal(18, 2)
-  amountPaid       Decimal       @default(0) @db.Decimal(18, 2)
-  notes            String?
-  sentAt           DateTime?
-  paidAt           DateTime?
-  paymentDate             DateTime?
-  paymentCoaId            String?
-  paymentMethod           String?
-  paymentReference        String?
-  paymentBankAccountId    String?
-  paymentBankAccount      CompanyBankAccount? @relation(fields: [paymentBankAccountId], references: [id], onDelete: SetNull)
-  createdByUserId  String
-  createdBy        User          @relation(fields: [createdByUserId], references: [id])
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  id                   String              @id @default(uuid())
+  companyId            String
+  company              Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contactId            String?
+  contact              Contact?            @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  invoiceNumber        String
+  clientName           String
+  clientEmail          String?
+  clientAddress        String?
+  issueDate            DateTime
+  dueDate              DateTime
+  status               InvoiceStatus       @default(DRAFT)
+  subtotal             Decimal             @db.Decimal(18, 2)
+  taxAmount            Decimal             @default(0) @db.Decimal(18, 2)
+  totalAmount          Decimal             @db.Decimal(18, 2)
+  amountPaid           Decimal             @default(0) @db.Decimal(18, 2)
+  notes                String?
+  sentAt               DateTime?
+  paidAt               DateTime?
+  paymentDate          DateTime?
+  paymentCoaId         String?
+  paymentMethod        String?
+  paymentReference     String?
+  paymentBankAccountId String?
+  paymentBankAccount   CompanyBankAccount? @relation(fields: [paymentBankAccountId], references: [id], onDelete: SetNull)
+  createdByUserId      String
+  createdBy            User                @relation(fields: [createdByUserId], references: [id])
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
 
   items          InvoiceItem[]
   attachments    InvoiceAttachment[]
@@ -595,22 +676,38 @@ enum JournalLineType {
 }
 
 model JournalEntry {
-  id                String        @id @default(uuid())
+  id                String             @id @default(uuid())
   companyId         String
-  company           Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company           Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
   description       String
   transactionDate   DateTime
-  isSystemGenerated Boolean       @default(false)
+  isSystemGenerated Boolean            @default(false)
   invoiceId         String?
-  invoice           Invoice?      @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  invoice           Invoice?           @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   createdByUserId   String
-  createdBy         User          @relation(fields: [createdByUserId], references: [id])
-  createdAt         DateTime      @default(now())
+  createdBy         User               @relation("JournalCreator", fields: [createdByUserId], references: [id])
+  createdAt         DateTime           @default(now())
 
-  lines             JournalLine[]
+  // Phase 8: approval workflow
+  // Default APPROVED so all existing entries remain effective without migration
+  status           JournalEntryStatus @default(APPROVED)
+  checkerUserId    String?
+  checker          User?              @relation("JournalChecker", fields: [checkerUserId], references: [id])
+  approverUserId   String?
+  approver         User?              @relation("JournalApprover", fields: [approverUserId], references: [id])
+  checkedAt        DateTime?
+  approvedAt       DateTime?
+  rejectedAt       DateTime?
+  rejectionNote    String?
+
+  lines            JournalLine[]
+  // Phase 8
+  attachments      JournalEntryAttachment[]
+  assetDepreciation AssetDepreciation?
 
   @@index([companyId, transactionDate])
   @@index([invoiceId])
+  @@index([companyId, status])
 }
 
 model JournalLine {
@@ -627,4 +724,125 @@ model JournalLine {
 
   @@index([journalEntryId])
   @@index([coaId])
+}
+
+// Phase 8: Journal entry file attachments
+model JournalEntryAttachment {
+  id               String       @id @default(uuid())
+  journalEntryId   String
+  journalEntry     JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  companyId        String
+  fileName         String
+  fileUrl          String
+  fileSize         Int
+  mimeType         String
+  uploadedByUserId String
+  uploadedBy       User         @relation("JournalEntryUploads", fields: [uploadedByUserId], references: [id])
+  createdAt        DateTime     @default(now())
+
+  @@index([journalEntryId])
+  @@index([companyId])
+}
+
+// ─────────────────────────────────────────────
+// Phase 8: TAX CONFIG (PPh per company)
+// ─────────────────────────────────────────────
+
+model TaxConfig {
+  id          String   @id @default(uuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  type        TaxType
+  name        String   // e.g. "PPh 23 – Jasa Konsultan 2%"
+  rate        Decimal  @db.Decimal(7, 4) // e.g. 2.0000
+  isActive    Boolean  @default(true)
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  suggestionRules TaxSuggestionRule[]
+
+  @@index([companyId, type])
+  @@index([companyId, isActive])
+}
+
+// Phase 8: custom tax suggestion rules per company
+model TaxSuggestionRule {
+  id                 String       @id @default(uuid())
+  companyId          String
+  company            Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  taxConfigId        String
+  taxConfig          TaxConfig    @relation(fields: [taxConfigId], references: [id], onDelete: Cascade)
+  triggerCoaIds      String[]     // match if debit/credit COA is in this list
+  triggerContactType ContactType? // null = any contact type
+  triggerKeywords    String[]     // match if description contains any keyword (case-insensitive)
+  minAmount          Decimal?     @db.Decimal(18, 2)
+  priority           Int          @default(0)
+  note               String?
+  isActive           Boolean      @default(true)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  @@index([companyId])
+  @@index([taxConfigId])
+}
+
+// ─────────────────────────────────────────────
+// Phase 8: ASSET MANAGEMENT (PSAK 16 & PSAK 19)
+// ─────────────────────────────────────────────
+
+model Asset {
+  id                       String             @id @default(uuid())
+  companyId                String
+  company                  Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  assetCoaId               String
+  assetCoa                 ChartOfAccount     @relation("AssetCoa", fields: [assetCoaId], references: [id])
+  accumulatedCoaId         String
+  accumulatedCoa           ChartOfAccount     @relation("AccumulatedCoa", fields: [accumulatedCoaId], references: [id])
+  depreciationExpenseCoaId String
+  depreciationExpenseCoa   ChartOfAccount     @relation("DepreciationExpenseCoa", fields: [depreciationExpenseCoaId], references: [id])
+  assetType                AssetType
+  name                     String
+  code                     String             // e.g. "FA-001"
+  acquisitionDate          DateTime
+  acquisitionCost          Decimal            @db.Decimal(18, 2)
+  residualValue            Decimal            @default(0) @db.Decimal(18, 2)
+  usefulLifeMonths         Int
+  depreciationMethod       DepreciationMethod
+  unitsTotal               Decimal?           @db.Decimal(18, 4) // UoP only
+  status                   AssetStatus        @default(ACTIVE)
+  disposalDate             DateTime?
+  disposalAmount           Decimal?           @db.Decimal(18, 2)
+  disposalCoaId            String?
+  disposalCoa              ChartOfAccount?    @relation("DisposalCoa", fields: [disposalCoaId], references: [id])
+  notes                    String?
+  createdByUserId          String
+  createdBy                User               @relation(fields: [createdByUserId], references: [id])
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+
+  depreciations AssetDepreciation[]
+
+  @@unique([companyId, code])
+  @@index([companyId, status])
+  @@index([companyId, assetType])
+}
+
+model AssetDepreciation {
+  id                      String       @id @default(uuid())
+  assetId                 String
+  asset                   Asset        @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  companyId               String
+  periodYear              Int
+  periodMonth             Int          // 1–12
+  depreciationAmount      Decimal      @db.Decimal(18, 2)
+  accumulatedDepreciation Decimal      @db.Decimal(18, 2)
+  bookValue               Decimal      @db.Decimal(18, 2)
+  unitsProduced           Decimal?     @db.Decimal(18, 4) // UoP only
+  journalEntryId          String?      @unique
+  journalEntry            JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  createdAt               DateTime     @default(now())
+
+  @@unique([assetId, periodYear, periodMonth])
+  @@index([companyId, periodYear, periodMonth])
 }

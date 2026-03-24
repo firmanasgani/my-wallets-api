@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { ChartOfAccountType, Company } from '@prisma/client';
+import { ChartOfAccountType, Company, JournalEntryStatus } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { DateRangeQueryDto } from './dto/date-range-query.dto';
@@ -12,9 +12,12 @@ const DEBIT_NORMAL: ChartOfAccountType[] = [
   ChartOfAccountType.EXPENSE,
 ];
 
+// Phase 8: only APPROVED journal entries affect financial position
+const APPROVED_ENTRY = { status: JournalEntryStatus.APPROVED } as const;
+
 @Injectable()
 export class FinancialReportsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   // ─── P&L ─────────────────────────────────────────────────────────────────
 
@@ -37,6 +40,7 @@ export class FinancialReportsService {
         coaId: { in: coas.map((c) => c.id) },
         journalEntry: {
           companyId: company.id,
+          ...APPROVED_ENTRY,
           ...(dateFilter ? { transactionDate: dateFilter } : {}),
         },
       },
@@ -53,12 +57,10 @@ export class FinancialReportsService {
     for (const coa of coas) {
       const mov = movMap[coa.id] ?? { debit: 0, credit: 0 };
       if (coa.type === ChartOfAccountType.REVENUE) {
-        // Normal balance = credit → net amount = credit - debit
         const amount = mov.credit - mov.debit;
         revenueAccounts.push({ coaCode: coa.code, coaName: coa.name, amount: this.fmt(amount) });
         totalRevenue += amount;
       } else {
-        // Normal balance = debit → net amount = debit - credit
         const amount = mov.debit - mov.credit;
         expenseAccounts.push({ coaCode: coa.code, coaName: coa.name, amount: this.fmt(amount) });
         totalExpense += amount;
@@ -94,6 +96,7 @@ export class FinancialReportsService {
         coaId: { in: coas.map((c) => c.id) },
         journalEntry: {
           companyId: company.id,
+          ...APPROVED_ENTRY,
           transactionDate: { lte: asOfDate },
         },
       },
@@ -121,8 +124,6 @@ export class FinancialReportsService {
       totals[coa.type] += balance;
     }
 
-    // Net profit = Revenue balance - Expense balance (cumulative, all time up to asOfDate)
-    // This represents current period earnings not yet closed to Retained Earnings
     const currentPeriodProfit = totals.REVENUE - totals.EXPENSE;
     const totalEquity = totals.EQUITY + currentPeriodProfit;
     const totalLiabilitiesAndEquity = totals.LIABILITY + totalEquity;
@@ -130,14 +131,8 @@ export class FinancialReportsService {
 
     return {
       asOfDate: asOfDate.toISOString(),
-      assets: {
-        accounts: grouped.ASSET,
-        total: this.fmt(totals.ASSET),
-      },
-      liabilities: {
-        accounts: grouped.LIABILITY,
-        total: this.fmt(totals.LIABILITY),
-      },
+      assets: { accounts: grouped.ASSET, total: this.fmt(totals.ASSET) },
+      liabilities: { accounts: grouped.LIABILITY, total: this.fmt(totals.LIABILITY) },
       equity: {
         accounts: grouped.EQUITY,
         currentPeriodProfit: this.fmt(currentPeriodProfit),
@@ -154,18 +149,13 @@ export class FinancialReportsService {
     const { startDate, endDate } = dto;
     const dateFilter = this.buildDateFilter(startDate, endDate);
 
-    // Cash accounts = all COA type ASSET (Kas, Bank, Piutang, dll)
-    // Simplified: DEBIT movement = cash in, CREDIT movement = cash out
     const assetCoas = await this.prisma.chartOfAccount.findMany({
       where: { companyId: company.id, type: ChartOfAccountType.ASSET },
       select: { id: true, code: true, name: true, openingBalance: true },
       orderBy: { code: 'asc' },
     });
 
-    const openingCash = assetCoas.reduce(
-      (sum, c) => sum + c.openingBalance.toNumber(),
-      0,
-    );
+    const openingCash = assetCoas.reduce((sum, c) => sum + c.openingBalance.toNumber(), 0);
 
     const movements = await this.prisma.journalLine.groupBy({
       by: ['coaId', 'type'],
@@ -173,6 +163,7 @@ export class FinancialReportsService {
         coaId: { in: assetCoas.map((c) => c.id) },
         journalEntry: {
           companyId: company.id,
+          ...APPROVED_ENTRY,
           ...(dateFilter ? { transactionDate: dateFilter } : {}),
         },
       },
@@ -199,7 +190,6 @@ export class FinancialReportsService {
     }
 
     const netCashFlow = totalInflow - totalOutflow;
-    const endingCash = openingCash + netCashFlow;
 
     return {
       period: { startDate: startDate ?? null, endDate: endDate ?? null },
@@ -209,7 +199,7 @@ export class FinancialReportsService {
       cashOutflows: outflowItems,
       totalOutflow: this.fmt(totalOutflow),
       netCashFlow: this.fmt(netCashFlow),
-      endingCash: this.fmt(endingCash),
+      endingCash: this.fmt(openingCash + netCashFlow),
     };
   }
 
@@ -222,8 +212,10 @@ export class FinancialReportsService {
     const skip = (page - 1) * limit;
     const dateFilter = this.buildDateFilter(startDate, endDate);
 
+    // General journal shows only APPROVED entries (posted to ledger)
     const where = {
       companyId: company.id,
+      ...APPROVED_ENTRY,
       ...(dateFilter ? { transactionDate: dateFilter } : {}),
     };
 
@@ -250,12 +242,7 @@ export class FinancialReportsService {
     const data = entries.map((entry) => {
       const debitLines = entry.lines.filter((l) => l.type === 'DEBIT');
       const creditLines = entry.lines.filter((l) => l.type === 'CREDIT');
-
-      const contactNames = [
-        ...new Set(
-          entry.lines.filter((l) => l.contact).map((l) => l.contact!.name),
-        ),
-      ];
+      const contactNames = [...new Set(entry.lines.filter((l) => l.contact).map((l) => l.contact!.name))];
 
       return {
         id: entry.id,
@@ -265,71 +252,33 @@ export class FinancialReportsService {
         contacts: contactNames.length > 0 ? contactNames : null,
         isSystemGenerated: entry.isSystemGenerated,
         debitLines: debitLines.map((l) => ({
-          coaCode: l.coa.code,
-          coaName: l.coa.name,
-          amount: l.amount.toString(),
-          description: l.description ?? null,
+          coaCode: l.coa.code, coaName: l.coa.name,
+          amount: l.amount.toString(), description: l.description ?? null,
           contact: l.contact?.name ?? null,
         })),
         creditLines: creditLines.map((l) => ({
-          coaCode: l.coa.code,
-          coaName: l.coa.name,
-          amount: l.amount.toString(),
-          description: l.description ?? null,
+          coaCode: l.coa.code, coaName: l.coa.name,
+          amount: l.amount.toString(), description: l.description ?? null,
           contact: l.contact?.name ?? null,
         })),
-        totalDebit: this.fmt(
-          debitLines.reduce((s, l) => s + l.amount.toNumber(), 0),
-        ),
-        totalCredit: this.fmt(
-          creditLines.reduce((s, l) => s + l.amount.toNumber(), 0),
-        ),
+        totalDebit: this.fmt(debitLines.reduce((s, l) => s + l.amount.toNumber(), 0)),
+        totalCredit: this.fmt(creditLines.reduce((s, l) => s + l.amount.toNumber(), 0)),
       };
     });
 
-    return {
-      data,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   // ─── Private Helpers ──────────────────────────────────────────────────────
 
-  /**
-   * Build a date range filter for `transactionDate`.
-   * Sets startDate to start-of-day and endDate to end-of-day (23:59:59.999)
-   * to ensure full-day inclusivity.
-   *
-   * Future upgrade point: when Period Closing is added, this helper
-   * is replaced/supplemented by a snapshot lookup in each report method.
-   */
   private buildDateFilter(startDate?: string, endDate?: string) {
     if (!startDate && !endDate) return undefined;
-
     const filter: { gte?: Date; lte?: Date } = {};
-    if (startDate) {
-      const d = new Date(startDate);
-      d.setHours(0, 0, 0, 0);
-      filter.gte = d;
-    }
-    if (endDate) {
-      const d = new Date(endDate);
-      d.setHours(23, 59, 59, 999);
-      filter.lte = d;
-    }
+    if (startDate) { const d = new Date(startDate); d.setHours(0, 0, 0, 0); filter.gte = d; }
+    if (endDate) { const d = new Date(endDate); d.setHours(23, 59, 59, 999); filter.lte = d; }
     return filter;
   }
 
-  /**
-   * Aggregate JournalLine groupBy results into a map of coaId → { debit, credit }.
-   *
-   * Future upgrade point: when Period Closing is added, the callers of this
-   * helper will first look up an AccountBalanceSnapshot and pass only the
-   * delta period to the groupBy query — this helper stays unchanged.
-   */
   private buildMovementMap(
     movements: { coaId: string; type: string; _sum: { amount: Prisma.Decimal | null } }[],
   ): Record<string, { debit: number; credit: number }> {

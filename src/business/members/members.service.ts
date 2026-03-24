@@ -28,10 +28,11 @@ const PAID_PLAN_CODES = [
 ];
 
 const ROLE_HIERARCHY: Record<CompanyMemberRole, number> = {
-  [CompanyMemberRole.VIEWER]: 0,
-  [CompanyMemberRole.STAFF]: 1,
-  [CompanyMemberRole.ADMIN]: 2,
-  [CompanyMemberRole.OWNER]: 3,
+  [CompanyMemberRole.VIEWER]:  0,
+  [CompanyMemberRole.STAFF]:   1,
+  [CompanyMemberRole.CHECKER]: 2,
+  [CompanyMemberRole.ADMIN]:   3,
+  [CompanyMemberRole.OWNER]:   4,
 };
 
 const INVITE_TOKEN_TTL_MINUTES = 30;

@@ -8,6 +8,9 @@ import { CompanyBankAccountsModule } from './company-bank-accounts/company-bank-
 import { TransactionsModule } from './transactions/transactions.module';
 import { FinancialReportsModule } from './financial-reports/financial-reports.module';
 import { KpiModule } from './kpi/kpi.module';
+// Phase 8
+import { TaxModule } from './tax/tax.module';
+import { AssetsModule } from './assets/assets.module';
 
 @Module({
   imports: [
@@ -20,6 +23,9 @@ import { KpiModule } from './kpi/kpi.module';
     TransactionsModule,
     FinancialReportsModule,
     KpiModule,
+    // Phase 8
+    TaxModule,
+    AssetsModule,
   ],
 })
 export class BusinessModule {}
