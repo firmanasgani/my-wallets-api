@@ -29,6 +29,9 @@ async function main() {
     {
       code: '014',
       name: 'PT. BANK CENTRAL ASIA, TBK - (BCA)',
+    },{
+      code: '501',
+      name: 'PT. BANK CENTRAL ASIA DIGITAL (Blu BCA)'
     },
     {
       code: '016',
@@ -187,6 +190,10 @@ async function main() {
       name: 'PT. BANK SYARIAH BUKOPIN',
     },
     {
+      code: '542',
+      name: 'Bank Jago'
+    },
+    {
       code: '525',
       name: 'PT. BANK AKITA',
     },
@@ -286,13 +293,48 @@ async function main() {
       discountPrice: 250000,
       durationMonths: 12,
     },
+    {
+      name: 'Business 1 Month',
+      code: 'BUSINESS_1M',
+      description: 'Business accounting access for 1 month',
+      price: 329000,
+      discountPrice: 296100,
+      durationMonths: 1,
+    },
+    {
+      name: 'Business 6 Months',
+      code: 'BUSINESS_6M',
+      description: 'Business accounting access for 6 months',
+      price: 1974000,
+      discountPrice: 1776600,
+      durationMonths: 6,
+    },
+    {
+      name: 'Business 1 Year',
+      code: 'BUSINESS_12M',
+      description: 'Business accounting access for 1 year',
+      price: 3948000,
+      discountPrice: 3553200,
+      durationMonths: 12,
+    },
+    {
+      name: 'Business Member',
+      code: 'BUSINESS_MEMBER',
+      description: 'Auto-assigned when a user accepts a company invitation. Free, managed by the system.',
+      price: 0,
+      discountPrice: null,
+      durationMonths: null,
+    },
   ];
 
   const seededPlans: any[] = [];
   for (const plan of plans) {
     const p = await prisma.subscriptionPlan.upsert({
       where: { code: plan.code },
-      update: plan,
+      update: {
+        price: plan.price,
+        discountPrice: plan.discountPrice,
+      },
       create: plan,
     });
     seededPlans.push(p);

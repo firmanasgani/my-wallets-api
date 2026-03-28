@@ -24,7 +24,7 @@ export class CreateLogDto {
     description?: string
 
     @IsOptional()
-    details: Prisma.JsonValue
+    details?: Prisma.JsonValue
 
     @IsOptional()
     @IsIP()

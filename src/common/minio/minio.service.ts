@@ -43,7 +43,7 @@ export class MinioService {
 
   async uploadFile(file: Express.Multer.File, path: string): Promise<string> {
     try {
-      const fileName = `${path}`;
+      const fileName = path.startsWith('/') ? path.slice(1) : path;
 
       await this.minioClient.putObject(
         this.bucketName,
@@ -65,7 +65,8 @@ export class MinioService {
 
   async deleteFile(path: string): Promise<void> {
     try {
-      await this.minioClient.removeObject(this.bucketName, path);
+      const cleanPath = path.startsWith('/') ? path.slice(1) : path;
+      await this.minioClient.removeObject(this.bucketName, cleanPath);
       this.logger.log(`File deleted successfully: ${path}`);
     } catch (error) {
       this.logger.error(`Error deleting file: ${error.message}`);
@@ -75,10 +76,12 @@ export class MinioService {
 
   async getFileUrl(path: string): Promise<string> {
     try {
+      // Strip leading slash to prevent double-slash in MinIO URL
+      const cleanPath = path.startsWith('/') ? path.slice(1) : path;
       // Generate presigned URL valid for 7 days
       const url = await this.minioClient.presignedGetObject(
         this.bucketName,
-        path,
+        cleanPath,
         24 * 60 * 60 * 7, // 7 days
       );
       return url;

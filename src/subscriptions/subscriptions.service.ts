@@ -27,9 +27,8 @@ export class SubscriptionsService {
 
   async getPlans() {
     return this.prisma.subscriptionPlan.findMany({
-      orderBy: {
-        price: 'asc',
-      },
+      where: { code: { not: 'BUSINESS_MEMBER' } },
+      orderBy: { price: 'asc' },
     });
   }
 

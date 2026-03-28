@@ -1,10 +1,11 @@
 import {
+  BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
   UnauthorizedException,
-  BadRequestException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { defaultCategoryTemplates } from 'src/common/category';
@@ -12,6 +13,7 @@ import { UsersService } from 'src/users/users.service';
 import { RegisterDto } from './dto/register.dto';
 import * as bcrypt from 'bcrypt';
 import {
+  CompanyMemberStatus,
   LogActionType,
   Prisma,
   SubscriptionStatus,
@@ -338,7 +340,7 @@ export class AuthService {
     const fileExtension = file.originalname.split('.').pop();
     const uniqueId = randomUUID();
     const fileName = `${timestamp}-${uniqueId}.${fileExtension}`;
-    const filePath = `/profile/${fileName}`;
+    const filePath = `profile/${fileName}`;
 
     try {
       // Upload new file to MinIO
@@ -505,6 +507,31 @@ export class AuthService {
       throw new BadRequestException('User not found');
     }
 
+    // Block deletion if user is still an active/pending member of a company
+    const activeMembership = await this.prisma.companyMember.findFirst({
+      where: {
+        userId,
+        status: { in: [CompanyMemberStatus.ACTIVE, CompanyMemberStatus.PENDING] },
+      },
+    });
+
+    if (activeMembership) {
+      throw new ForbiddenException(
+        'Cannot delete account while you are a member of a company. Please ask the company owner to revoke your access first.',
+      );
+    }
+
+    // Block deletion if user owns a company
+    const ownedCompany = await this.prisma.company.findFirst({
+      where: { ownerId: userId },
+    });
+
+    if (ownedCompany) {
+      throw new ForbiddenException(
+        'Cannot delete account while you own a company. Please delete the company first.',
+      );
+    }
+
     try {
       // 1. Delete profile picture from MinIO if exists
       if (user.profilePicture) {
@@ -623,9 +650,18 @@ export class AuthService {
       daysRemaining = Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
     }
 
-    const displayPlan = activeSubscription?.plan.code?.startsWith('PREMIUM')
-      ? 'PREMIUM'
-      : 'FREE';
+    let displayPlan = 'FREE';
+    const planCode = activeSubscription?.plan?.code;
+    
+    if (planCode) {
+      if (planCode.startsWith('PREMIUM')) {
+        displayPlan = 'PREMIUM';
+      } else if (planCode.startsWith('BUSINESS')) {
+        displayPlan = 'BUSINESS';
+      } else {
+        displayPlan = planCode;
+      }
+    }
 
     return {
       ...userWithoutPassword,
