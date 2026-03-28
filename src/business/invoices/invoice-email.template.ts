@@ -39,6 +39,16 @@ export interface InvoiceEmailData {
   bankName: string | null;
   bankAccountNumber: string | null;
   bankAccountHolder: string | null;
+
+  // PPN dari company default
+  companyTaxEnabled: boolean;
+  companyTaxRate: string;
+
+  // Withholding tax dari taxConfig (PPh, dll) — opsional
+  withholdingTaxAmount: Prisma.Decimal;
+  taxConfigName: string | null;
+  taxConfigType: string | null;
+  taxConfigRate: string | null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -174,7 +184,18 @@ export function buildInvoiceEmailHtml(data: InvoiceEmailData): string {
     bankName,
     bankAccountNumber,
     bankAccountHolder,
+    companyTaxEnabled,
+    companyTaxRate,
+    withholdingTaxAmount,
+    taxConfigName,
+    taxConfigType,
+    taxConfigRate,
   } = data;
+
+  const showPpn = companyTaxEnabled && new Prisma.Decimal(taxAmount).gt(0);
+  const ppnLabel = `PPN (${companyTaxRate}%)`;
+  const showWithholding = taxConfigName !== null && new Prisma.Decimal(withholdingTaxAmount).gt(0);
+  const withholdingLabel = taxConfigRate ? `${taxConfigName} (${taxConfigRate}%)` : (taxConfigName ?? '');
 
   const itemRows = buildItemRows(items);
   const bankSection = buildBankSection(bankName, bankAccountNumber, bankAccountHolder);
@@ -314,10 +335,19 @@ export function buildInvoiceEmailHtml(data: InvoiceEmailData): string {
                       <td style="padding:5px 0;font-size:13px;color:#64748b;">Subtotal</td>
                       <td style="padding:5px 0;font-size:13px;color:#334155;text-align:right;font-family:'Courier New',Courier,monospace;">${formatRupiah(subtotal)}</td>
                     </tr>
+                    ${showPpn ? `
                     <tr>
-                      <td style="padding:5px 0;font-size:13px;color:#64748b;">PPN</td>
+                      <td style="padding:5px 0;font-size:13px;color:#64748b;">${ppnLabel}</td>
                       <td style="padding:5px 0;font-size:13px;color:#334155;text-align:right;font-family:'Courier New',Courier,monospace;">${formatRupiah(taxAmount)}</td>
-                    </tr>
+                    </tr>` : ''}
+                    ${showWithholding ? `
+                    <tr>
+                      <td style="padding:5px 0 2px;">
+                        <span style="font-size:13px;color:#64748b;">${withholdingLabel}</span><br/>
+                        <span style="display:inline-block;margin-top:2px;font-size:10px;color:#6366f1;background-color:#eef2ff;border:1px solid #c7d2fe;border-radius:4px;padding:1px 7px;">${taxConfigType ? taxConfigType.replace(/_/g, ' ') : ''} · ${taxConfigName}</span>
+                      </td>
+                      <td style="padding:5px 0;font-size:13px;color:#334155;text-align:right;vertical-align:top;font-family:'Courier New',Courier,monospace;">${formatRupiah(withholdingTaxAmount)}</td>
+                    </tr>` : ''}
                     <tr>
                       <td colspan="2" style="padding:4px 0;">
                         <div style="height:1px;background-color:#e2e8f0;"></div>

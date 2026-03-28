@@ -29,6 +29,9 @@ async function main() {
     {
       code: '014',
       name: 'PT. BANK CENTRAL ASIA, TBK - (BCA)',
+    },{
+      code: '501',
+      name: 'PT. BANK CENTRAL ASIA DIGITAL (Blu BCA)'
     },
     {
       code: '016',
@@ -185,6 +188,10 @@ async function main() {
     {
       code: '521',
       name: 'PT. BANK SYARIAH BUKOPIN',
+    },
+    {
+      code: '542',
+      name: 'Bank Jago'
     },
     {
       code: '525',

@@ -71,6 +71,10 @@ export class UpdateInvoiceDto {
   paymentBankAccountId?: string;
 
   @IsOptional()
+  @IsUUID()
+  taxConfigId?: string;
+
+  @IsOptional()
   @IsArray()
   @ArrayMinSize(1)
   @ValidateNested({ each: true })

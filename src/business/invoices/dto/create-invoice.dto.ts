@@ -71,6 +71,10 @@ export class CreateInvoiceDto {
   @IsUUID()
   paymentBankAccountId?: string;
 
+  @IsOptional()
+  @IsUUID()
+  taxConfigId?: string;
+
   @IsArray()
   @ArrayMinSize(1)
   @ValidateNested({ each: true })

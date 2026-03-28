@@ -157,7 +157,14 @@ export class InvoicesService {
   async findById(companyId: string, id: string) {
     const invoice = await this.prisma.invoice.findFirst({
       where: { id, companyId },
-      include: { items: true, contact: true, attachments: true, paymentBankAccount: true },
+      include: {
+        items: true,
+        contact: true,
+        attachments: true,
+        paymentBankAccount: true,
+        taxConfig: true,
+        company: { select: { taxEnabled: true, taxRate: true } },
+      },
     });
     if (!invoice) throw new NotFoundException('Invoice not found.');
     return invoice;
@@ -189,9 +196,26 @@ export class InvoicesService {
       if (!bankAccount) throw new NotFoundException('Bank account not found in this company.');
     }
 
-    const taxRate = new Prisma.Decimal(company.taxRate.toString());
-    const computedItems = this.computeItems(dto.items, company.taxEnabled, taxRate);
-    const { subtotal, taxAmount, totalAmount } = this.computeTotals(computedItems);
+    // PPN selalu dari company default, diterapkan per item
+    const ppnRate = new Prisma.Decimal(company.taxRate.toString());
+    const computedItems = this.computeItems(dto.items, company.taxEnabled, ppnRate);
+    const { subtotal, taxAmount, totalAmount: subtotalPlusPpn } = this.computeTotals(computedItems);
+
+    // Withholding tax (PPh, dll) dari taxConfig — diterapkan pada subtotal
+    let withholdingTaxAmount = new Prisma.Decimal(0);
+    let taxConfigId: string | null = null;
+
+    if (dto.taxConfigId) {
+      const taxConfig = await this.prisma.taxConfig.findFirst({
+        where: { id: dto.taxConfigId, companyId: company.id },
+      });
+      if (!taxConfig) throw new NotFoundException('Tax config not found in this company.');
+      if (!taxConfig.isActive) throw new BadRequestException('Tax config is inactive.');
+      withholdingTaxAmount = subtotal.mul(taxConfig.rate).div(100);
+      taxConfigId = taxConfig.id;
+    }
+
+    const totalAmount = subtotalPlusPpn.add(withholdingTaxAmount);
     const invoiceNumber = await this.generateInvoiceNumber(company.id);
 
     const invoice = await this.prisma.invoice.create({
@@ -207,9 +231,11 @@ export class InvoicesService {
         status: InvoiceStatus.DRAFT,
         subtotal,
         taxAmount,
+        withholdingTaxAmount,
         totalAmount,
         notes: dto.notes ?? null,
         paymentBankAccountId: dto.paymentBankAccountId ?? null,
+        taxConfigId,
         createdByUserId: userId,
         items: {
           create: computedItems.map((i) => ({
@@ -242,7 +268,7 @@ export class InvoicesService {
   async update(_userId: string, companyId: string, id: string, dto: UpdateInvoiceDto) {
     const invoice = await this.prisma.invoice.findFirst({
       where: { id, companyId },
-      include: { company: true },
+      include: { company: true, taxConfig: true },
     });
     if (!invoice) throw new NotFoundException('Invoice not found.');
     if (invoice.status !== InvoiceStatus.DRAFT) {
@@ -271,10 +297,22 @@ export class InvoicesService {
     }
 
     const company = invoice.company;
-    const taxRate = new Prisma.Decimal(company.taxRate.toString());
+    const ppnRate = new Prisma.Decimal(company.taxRate.toString());
+
+    // Resolve taxConfig baru jika dikirim
+    let resolvedTaxConfig: { id: string; rate: Prisma.Decimal } | null = null;
+    if (dto.taxConfigId !== undefined && dto.taxConfigId !== null) {
+      const taxConfig = await this.prisma.taxConfig.findFirst({
+        where: { id: dto.taxConfigId, companyId },
+      });
+      if (!taxConfig) throw new NotFoundException('Tax config not found in this company.');
+      if (!taxConfig.isActive) throw new BadRequestException('Tax config is inactive.');
+      resolvedTaxConfig = { id: taxConfig.id, rate: new Prisma.Decimal(taxConfig.rate.toString()) };
+    }
 
     let subtotal: Prisma.Decimal | undefined;
     let taxAmount: Prisma.Decimal | undefined;
+    let withholdingTaxAmount: Prisma.Decimal | undefined;
     let totalAmount: Prisma.Decimal | undefined;
     let itemUpdates: Prisma.InvoiceUpdateInput['items'] | undefined;
 
@@ -288,13 +326,22 @@ export class InvoicesService {
           discountAmount: i.discountAmount,
         })),
         company.taxEnabled,
-        taxRate,
+        ppnRate,
       );
 
       const totals = this.computeTotals(computedItems);
       subtotal = totals.subtotal;
       taxAmount = totals.taxAmount;
-      totalAmount = totals.totalAmount;
+
+      // Hitung withholding tax dari taxConfig yang aktif
+      const activeTaxConfig = resolvedTaxConfig ?? (
+        dto.taxConfigId === null ? null : (invoice.taxConfig ? { id: invoice.taxConfig.id, rate: new Prisma.Decimal(invoice.taxConfig.rate.toString()) } : null)
+      );
+      withholdingTaxAmount = activeTaxConfig
+        ? subtotal.mul(activeTaxConfig.rate).div(100)
+        : new Prisma.Decimal(0);
+
+      totalAmount = totals.totalAmount.add(withholdingTaxAmount);
 
       itemUpdates = {
         deleteMany: {},
@@ -322,8 +369,10 @@ export class InvoicesService {
         dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
         notes: dto.notes !== undefined ? (dto.notes ?? null) : undefined,
         paymentBankAccountId: dto.paymentBankAccountId !== undefined ? (dto.paymentBankAccountId ?? null) : undefined,
+        taxConfigId: dto.taxConfigId !== undefined ? (dto.taxConfigId ?? null) : undefined,
         subtotal,
         taxAmount,
+        withholdingTaxAmount,
         totalAmount,
         items: itemUpdates,
       },
@@ -340,6 +389,7 @@ export class InvoicesService {
         company: true,
         items: true,
         paymentBankAccount: true,
+        taxConfig: true,
       },
     });
     if (!invoice) throw new NotFoundException('Invoice not found.');
@@ -383,6 +433,12 @@ export class InvoicesService {
           bankName: invoice.paymentBankAccount?.bankName ?? null,
           bankAccountNumber: invoice.paymentBankAccount?.accountNumber ?? null,
           bankAccountHolder: invoice.paymentBankAccount?.accountHolder ?? null,
+          companyTaxEnabled: invoice.company.taxEnabled,
+          companyTaxRate: Number(invoice.company.taxRate).toString(),
+          withholdingTaxAmount: (invoice as any).withholdingTaxAmount ?? new Prisma.Decimal(0),
+          taxConfigName: invoice.taxConfig?.name ?? null,
+          taxConfigType: invoice.taxConfig?.type ?? null,
+          taxConfigRate: invoice.taxConfig ? Number(invoice.taxConfig.rate).toString() : null,
         });
 
         await resend.emails.send({
@@ -417,6 +473,7 @@ export class InvoicesService {
         company: true,
         items: true,
         paymentBankAccount: true,
+        taxConfig: true,
       },
     });
     if (!invoice) throw new NotFoundException('Invoice not found.');
@@ -467,6 +524,12 @@ export class InvoicesService {
       bankName: invoice.paymentBankAccount?.bankName ?? null,
       bankAccountNumber: invoice.paymentBankAccount?.accountNumber ?? null,
       bankAccountHolder: invoice.paymentBankAccount?.accountHolder ?? null,
+      companyTaxEnabled: invoice.company.taxEnabled,
+      companyTaxRate: Number(invoice.company.taxRate).toString(),
+      withholdingTaxAmount: (invoice as any).withholdingTaxAmount ?? new Prisma.Decimal(0),
+      taxConfigName: invoice.taxConfig?.name ?? null,
+      taxConfigType: invoice.taxConfig?.type ?? null,
+      taxConfigRate: invoice.taxConfig ? Number(invoice.taxConfig.rate).toString() : null,
     });
 
     await resend.emails.send({
@@ -493,7 +556,7 @@ export class InvoicesService {
   async pay(userId: string, companyId: string, id: string, dto: PayInvoiceDto) {
     const invoice = await this.prisma.invoice.findFirst({
       where: { id, companyId },
-      include: { company: true },
+      include: { company: true, taxConfig: true },
     });
     if (!invoice) throw new NotFoundException('Invoice not found.');
     if (invoice.status !== InvoiceStatus.SENT && invoice.status !== InvoiceStatus.OVERDUE) {
@@ -584,14 +647,14 @@ export class InvoicesService {
                 coaId: revenueCoa.id,
                 type: 'DEBIT',
                 amount: taxDecimal,
-                description: `PPN dari invoice ${invoice.invoiceNumber}`,
+                description: `${invoice.taxConfig?.name ?? 'Pajak'} dari invoice ${invoice.invoiceNumber}`,
                 contactId: null,
               },
               {
                 coaId: taxCoa.id,
                 type: 'CREDIT',
                 amount: taxDecimal,
-                description: `Utang PPN invoice ${invoice.invoiceNumber}`,
+                description: `Utang ${invoice.taxConfig?.name ?? 'Pajak'} invoice ${invoice.invoiceNumber}`,
                 contactId: null,
               },
             );
@@ -664,7 +727,7 @@ export class InvoicesService {
   async duplicate(userId: string, company: Company, id: string) {
     const source = await this.prisma.invoice.findFirst({
       where: { id, companyId: company.id },
-      include: { items: true },
+      include: { items: true, taxConfig: true },
     });
     if (!source) throw new NotFoundException('Invoice not found.');
 
@@ -684,9 +747,11 @@ export class InvoicesService {
         status: InvoiceStatus.DRAFT,
         subtotal: source.subtotal,
         taxAmount: source.taxAmount,
+        withholdingTaxAmount: source.withholdingTaxAmount,
         totalAmount: source.totalAmount,
         notes: source.notes,
         paymentBankAccountId: source.paymentBankAccountId,
+        taxConfigId: source.taxConfigId ?? null,
         createdByUserId: userId,
         items: {
           create: source.items.map((i) => ({

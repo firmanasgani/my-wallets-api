@@ -23,6 +23,7 @@
 10. [Pengaturan Perusahaan — Approval Workflow Toggle](#10-pengaturan-perusahaan--approval-workflow-toggle)
 11. [Enum Reference](#11-enum-reference)
 12. [Error Reference](#12-error-reference)
+13. [**UPDATE** — Pajak per Invoice (`taxConfigId`)](#13-update--pajak-per-invoice-taxconfigid)
 
 ---
 
@@ -1330,3 +1331,225 @@ Field baru Phase 8: `requiresApprovalWorkflow`.
 - **File Upload:** Validasi tipe dan ukuran file di sisi client sebelum upload (PDF/JPEG/PNG/WebP, max 10MB).
 - **P&L Detail Chart:** Sajikan `profitLossDetail` sebagai waterfall chart: operatingRevenue → -COGS → grossProfit → -operatingExpenses → +nonOperatingIncome → -nonOperatingExpenses → netProfit.
 - **Asset Book Value:** Tampilkan `currentBookValue` dengan progress bar vs `acquisitionCost` untuk visualisasi penyusutan.
+- **Pajak Invoice:** Tambahkan dropdown "Withholding Tax" (PPh) di form invoice yang memanggil `GET /business/tax` (filter `isActive: true`). PPN tetap dihitung otomatis dari pengaturan perusahaan — dropdown ini hanya untuk pajak tambahan (PPh 21, PPh 23, dll.).
+
+---
+
+## 13. UPDATE — Pajak per Invoice (`taxConfigId` + `withholdingTaxAmount`)
+
+> **Notes: update** — Fitur ini merupakan tambahan pada Phase 8. Invoice kini mendukung **dua lapisan pajak** yang terpisah.
+
+### Desain Pajak Invoice
+
+Invoice menerapkan dua pajak secara terpisah dan keduanya muncul di email:
+
+| Pajak | Sumber | Diterapkan pada | Field |
+|-------|--------|-----------------|-------|
+| **PPN** | `company.taxEnabled` + `company.taxRate` | Per item yang `taxable: true` | `taxAmount` |
+| **Withholding Tax** (PPh, dll.) | `taxConfigId` (opsional) | Subtotal invoice | `withholdingTaxAmount` |
+
+```
+subtotal            = Σ (qty × harga - diskon) per item
+taxAmount (PPN)     = Σ (subtotal_item × company.taxRate) untuk item taxable
+withholdingTaxAmount = subtotal × taxConfig.rate  (jika taxConfigId diisi)
+totalAmount         = subtotal + taxAmount + withholdingTaxAmount
+```
+
+---
+
+### 13.1 Buat Invoice dengan Withholding Tax
+
+**`POST /business/invoices`** — Role: ADMIN+ | HTTP 201
+
+> Dokumentasi lengkap endpoint ini ada di Phase sebelumnya. Berikut field tambahan yang tersedia.
+
+**Field Tambahan di Request Body:**
+
+| Field         | Tipe   | Wajib | Deskripsi |
+|---------------|--------|-------|-----------|
+| `taxConfigId` | string | Tidak | UUID TaxConfig (PPh 21, PPh 23, dll.) milik perusahaan. Diterapkan pada **subtotal** invoice. TaxConfig harus aktif. PPN tetap dihitung dari `company.taxEnabled` + `company.taxRate`. |
+
+**Contoh Request Body:**
+```json
+{
+  "contactId": "uuid-contact",
+  "issueDate": "2026-03-28",
+  "dueDate": "2026-04-28",
+  "taxConfigId": "uuid-pph23-config",
+  "items": [
+    {
+      "description": "Jasa Konsultasi",
+      "quantity": 1,
+      "unitPrice": 10000000,
+      "taxable": true
+    },
+    {
+      "description": "Biaya Transportasi",
+      "quantity": 1,
+      "unitPrice": 500000,
+      "taxable": false
+    }
+  ]
+}
+```
+
+**Contoh Response (201):**
+
+> Asumsi: `company.taxEnabled = true`, `company.taxRate = 11`, `taxConfig.rate = 2` (PPh 23)
+
+```json
+{
+  "id": "uuid-invoice",
+  "invoiceNumber": "INV-2026-03-0001",
+  "clientName": "PT Maju Bersama",
+  "taxConfigId": "uuid-pph23-config",
+  "subtotal": "10500000.00",
+  "taxAmount": "1100000.00",
+  "withholdingTaxAmount": "210000.00",
+  "totalAmount": "11810000.00",
+  "status": "DRAFT",
+  "taxConfig": {
+    "id": "uuid-pph23-config",
+    "type": "PPH_23",
+    "name": "PPh Pasal 23 - Jasa",
+    "rate": "2.0000",
+    "isActive": true
+  },
+  "items": [
+    {
+      "description": "Jasa Konsultasi",
+      "quantity": "1.0000",
+      "unitPrice": "10000000.00",
+      "taxable": true,
+      "taxRate": "11.00",
+      "taxAmount": "1100000.00",
+      "total": "11100000.00"
+    },
+    {
+      "description": "Biaya Transportasi",
+      "quantity": "1.0000",
+      "unitPrice": "500000.00",
+      "taxable": false,
+      "taxRate": "0.00",
+      "taxAmount": "0.00",
+      "total": "500000.00"
+    }
+  ]
+}
+```
+
+> **Kalkulasi:**
+> - `subtotal` = 10.000.000 + 500.000 = **10.500.000**
+> - `taxAmount` (PPN 11% dari item taxable) = 10.000.000 × 11% = **1.100.000**
+> - `withholdingTaxAmount` (PPh 23 2% dari subtotal) = 10.500.000 × 2% = **210.000**
+> - `totalAmount` = 10.500.000 + 1.100.000 + 210.000 = **11.810.000**
+
+**Error spesifik:**
+
+| Kondisi | HTTP | Pesan |
+|---------|------|-------|
+| `taxConfigId` tidak ditemukan di perusahaan ini | `404` | `Tax config not found in this company.` |
+| TaxConfig tidak aktif | `400` | `Tax config is inactive.` |
+
+---
+
+### 13.2 Update Invoice — Ganti atau Hapus Withholding Tax
+
+**`PUT /business/invoices/:id`** — Role: ADMIN+ | HTTP 200
+
+> Hanya invoice berstatus **DRAFT** yang bisa diedit.
+
+**Field Tambahan di Request Body:**
+
+| Field         | Tipe          | Wajib | Deskripsi |
+|---------------|---------------|-------|-----------|
+| `taxConfigId` | string / null | Tidak | Kirim UUID untuk mengganti withholding tax. Kirim `null` untuk menghapus (tidak ada withholding tax, `withholdingTaxAmount` jadi 0). Jika tidak dikirim sama sekali, nilai tidak berubah. |
+
+**Contoh — Set withholding tax:**
+```json
+{ "taxConfigId": "uuid-pph23-config" }
+```
+
+**Contoh — Hapus withholding tax:**
+```json
+{ "taxConfigId": null }
+```
+
+> **Catatan:** Jika `items` juga dikirim bersamaan, `taxAmount` dan `withholdingTaxAmount` akan dihitung ulang sesuai `taxConfigId` terbaru.
+
+---
+
+### 13.3 Detail Invoice (`GET /business/invoices/:id`) — Field Baru
+
+**`GET /business/invoices/:id`** — Role: VIEWER+
+
+Response kini menyertakan `taxConfig`, `withholdingTaxAmount`, dan `company` (PPN info):
+
+```json
+{
+  "id": "uuid-invoice",
+  "invoiceNumber": "INV-2026-03-0001",
+  "subtotal": "10500000.00",
+  "taxAmount": "1100000.00",
+  "withholdingTaxAmount": "210000.00",
+  "totalAmount": "11810000.00",
+  "taxConfigId": "uuid-pph23-config",
+  "taxConfig": {
+    "id": "uuid-pph23-config",
+    "type": "PPH_23",
+    "name": "PPh Pasal 23 - Jasa",
+    "rate": "2.0000",
+    "isActive": true,
+    "description": null
+  },
+  "company": {
+    "taxEnabled": true,
+    "taxRate": "11.00"
+  },
+  "contact": { "...": "..." },
+  "items": [ { "...": "..." } ],
+  "attachments": [],
+  "paymentBankAccount": null
+}
+```
+
+> **Gunakan `company.taxEnabled` + `company.taxRate`** untuk menampilkan label "PPN (11%)" di UI.
+> Jika `taxConfigId` null, `withholdingTaxAmount` selalu `"0.00"`.
+
+---
+
+### 13.4 Tampilan Email Invoice — Dua Baris Pajak
+
+Email yang dikirim ke klien menampilkan PPN dan withholding tax secara terpisah:
+
+```
+Subtotal                          Rp 10.500.000
+PPN (11%)                          Rp  1.100.000
+PPh Pasal 23 - Jasa (2%)          Rp    210.000
+[badge: PPH 23 · PPh Pasal 23 - Jasa]
+──────────────────────────────────────────────
+Total                             Rp 11.810.000
+```
+
+- Baris **PPN** hanya muncul jika `company.taxEnabled = true` dan `taxAmount > 0`
+- Baris **Withholding Tax** hanya muncul jika `withholdingTaxAmount > 0`
+- Kolom pajak di tabel item selalu berlabel **"PPN"** (per-item menggunakan company rate)
+
+---
+
+### 13.5 Alur Jurnal Pembayaran Invoice
+
+Saat invoice dibayar (`POST /business/invoices/:id/pay`) dan ada `taxAmount > 0`, sistem membuat baris jurnal pajak dengan nama dinamis dari TaxConfig:
+
+```
+DEBIT  Kas/Bank              → Rp 11.810.000  (total yang diterima)
+CREDIT Pendapatan (4-001)    → Rp 11.810.000
+
+Jika lunas + taxAmount > 0:
+  DEBIT  Pendapatan (4-001)       → "PPh Pasal 23 - Jasa dari invoice INV-..."
+  CREDIT Utang Pajak (2-002)      → "Utang PPh Pasal 23 - Jasa invoice INV-..."
+
+Jika tidak ada taxConfig:
+  DEBIT  Pendapatan               → "Pajak dari invoice INV-..."
+  CREDIT Utang Pajak (2-002)      → "Utang Pajak invoice INV-..."
+```

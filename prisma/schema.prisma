@@ -244,6 +244,8 @@ enum LogActionType {
   BUSINESS_ASSET_UPDATE
   BUSINESS_ASSET_DISPOSED
   BUSINESS_ASSET_DEPRECIATION_RUN
+  BUSINESS_TRANSACTION_CREATE
+  BUSINESS_TRANSACTION_DELETE
 }
 
 model PaymentTransaction {
@@ -610,7 +612,8 @@ model Invoice {
   dueDate              DateTime
   status               InvoiceStatus       @default(DRAFT)
   subtotal             Decimal             @db.Decimal(18, 2)
-  taxAmount            Decimal             @default(0) @db.Decimal(18, 2)
+  taxAmount            Decimal             @default(0) @db.Decimal(18, 2)   // PPN dari company default
+  withholdingTaxAmount Decimal             @default(0) @db.Decimal(18, 2)   // Pajak dari taxConfig (PPh, dll)
   totalAmount          Decimal             @db.Decimal(18, 2)
   amountPaid           Decimal             @default(0) @db.Decimal(18, 2)
   notes                String?
@@ -622,6 +625,8 @@ model Invoice {
   paymentReference     String?
   paymentBankAccountId String?
   paymentBankAccount   CompanyBankAccount? @relation(fields: [paymentBankAccountId], references: [id], onDelete: SetNull)
+  taxConfigId          String?
+  taxConfig            TaxConfig?          @relation(fields: [taxConfigId], references: [id], onDelete: SetNull)
   createdByUserId      String
   createdBy            User                @relation(fields: [createdByUserId], references: [id])
   createdAt            DateTime            @default(now())
@@ -761,6 +766,7 @@ model TaxConfig {
   updatedAt   DateTime @updatedAt
 
   suggestionRules TaxSuggestionRule[]
+  invoices        Invoice[]
 
   @@index([companyId, type])
   @@index([companyId, isActive])
