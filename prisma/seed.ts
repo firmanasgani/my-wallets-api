@@ -297,24 +297,24 @@ async function main() {
       name: 'Business 1 Month',
       code: 'BUSINESS_1M',
       description: 'Business accounting access for 1 month',
-      price: 149000,
-      discountPrice: 129000,
+      price: 329000,
+      discountPrice: 296100,
       durationMonths: 1,
     },
     {
       name: 'Business 6 Months',
       code: 'BUSINESS_6M',
       description: 'Business accounting access for 6 months',
-      price: 749000,
-      discountPrice: 649000,
+      price: 1974000,
+      discountPrice: 1776600,
       durationMonths: 6,
     },
     {
       name: 'Business 1 Year',
       code: 'BUSINESS_12M',
       description: 'Business accounting access for 1 year',
-      price: 1299000,
-      discountPrice: 1099000,
+      price: 3948000,
+      discountPrice: 3553200,
       durationMonths: 12,
     },
     {
@@ -331,7 +331,10 @@ async function main() {
   for (const plan of plans) {
     const p = await prisma.subscriptionPlan.upsert({
       where: { code: plan.code },
-      update: plan,
+      update: {
+        price: plan.price,
+        discountPrice: plan.discountPrice,
+      },
       create: plan,
     });
     seededPlans.push(p);
