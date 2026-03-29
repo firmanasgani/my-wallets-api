@@ -105,6 +105,7 @@ export class InvoicesController {
     @GetCompany() company: Company,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
+
     return this.service.send(user.id, company.id, id);
   }
 

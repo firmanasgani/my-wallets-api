@@ -383,6 +383,9 @@ export class InvoicesService {
   }
 
   async send(userId: string, companyId: string, id: string) {
+    const userData = await this.prisma.user.findFirst({ where: { id: userId }, select: { id: true, email: true } });
+    const isDemoAccount = userData?.email?.toLowerCase() === 'demo@firmanasgani.id';
+
     const invoice = await this.prisma.invoice.findFirst({
       where: { id, companyId },
       include: {
@@ -403,8 +406,8 @@ export class InvoicesService {
       data: { status: InvoiceStatus.SENT, sentAt: now },
     });
 
-    // Kirim email ke clientEmail jika ada
-    if (invoice.clientEmail) {
+    // Kirim email ke clientEmail jika ada dan bukan akun demo
+    if (invoice.clientEmail && !isDemoAccount) {
       try {
         const resend = new Resend(process.env.RESEND_API_KEY);
         const from = (process.env.SMTP_FROM || 'Moneytory <noreply@moneytory.com>').replace(
@@ -463,10 +466,21 @@ export class InvoicesService {
       details: null,
     });
 
+    if (isDemoAccount) {
+      return {
+        ...updated,
+        demoEmailSkipped: true,
+        demoNote: 'Invoice berhasil diperbarui ke status SENT, namun email tidak dikirim karena ini adalah akun demo.',
+      };
+    }
+
     return updated;
   }
 
   async sendEmail(userId: string, companyId: string, id: string) {
+    const userData = await this.prisma.user.findFirst({ where: { id: userId }, select: { email: true } });
+    const isDemoAccount = userData?.email?.toLowerCase() === 'demo@firmanasgani.id';
+
     const invoice = await this.prisma.invoice.findFirst({
       where: { id, companyId },
       include: {
@@ -495,6 +509,13 @@ export class InvoicesService {
           `Email untuk invoice ini baru saja dikirim. Silakan tunggu ${remainingMin} menit lagi.`,
         );
       }
+    }
+
+    if (isDemoAccount) {
+      return {
+        demoEmailSkipped: true,
+        demoNote: 'Email tidak dikirim karena ini adalah akun demo.',
+      };
     }
 
     const resend = new Resend(process.env.RESEND_API_KEY);

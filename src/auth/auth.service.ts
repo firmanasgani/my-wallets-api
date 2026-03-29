@@ -689,6 +689,10 @@ export class AuthService {
       return { message: 'If the email is registered, an OTP has been sent.' };
     }
 
+    if(email == 'demo@firmanasgani.id') {
+      throw new BadRequestException('This account is for demo purposes only. Cannot use forgot password feature.');
+    }
+    
     // Rate Limiting (In-memory, 1 request per 1 minute)
     const now = Date.now();
     const lastRequestTime = this.otpRequestTimeStore.get(email);
