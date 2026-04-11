@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MinioService } from '../../common/minio/minio.service';
-import { Company, InvoiceStatus, LogActionType, Prisma } from '@prisma/client';
+import { Company, InvoiceStatus, LogActionType, Prisma, TaxType } from '@prisma/client';
 import { LogsService } from '../../logs/logs.service';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
@@ -633,15 +633,18 @@ export class InvoicesService {
         },
       });
 
-      // Jurnal pembayaran invoice: Debit Kas/Bank, Credit Pendapatan
-      // Jika lunas penuh dan ada PPN: tambahkan baris Debit Pendapatan, Credit Utang PPN
-      const journalLines: {
+      // Jurnal pembayaran invoice:
+      // Pelunasan penuh: D Bank=total | C Revenue=subtotal | C Hutang PPN=taxAmount | C Hutang PPh=withholdingTax
+      // Pembayaran sebagian: D Bank=payNow | C Revenue=payNow (tanpa pemisahan pajak)
+      type JournalLine = {
         coaId: string;
         type: 'DEBIT' | 'CREDIT';
         amount: Prisma.Decimal;
         description: string;
         contactId: string | null;
-      }[] = [
+      };
+
+      const journalLines: JournalLine[] = [
         {
           coaId: dto.paymentCoaId,
           type: 'DEBIT',
@@ -649,38 +652,73 @@ export class InvoicesService {
           description: `Penerimaan dari invoice ${invoice.invoiceNumber}`,
           contactId: invoice.contactId ?? null,
         },
-        {
+      ];
+
+      if (isFullyPaid) {
+        const ppnDecimal = new Prisma.Decimal(invoice.taxAmount.toString());
+        const withholdingDecimal = new Prisma.Decimal(
+          (invoice as any).withholdingTaxAmount?.toString() ?? '0',
+        );
+
+        // Hitung porsi pendapatan bersih = total - PPN - PPh
+        const revenueAmount = payNow.sub(ppnDecimal).sub(withholdingDecimal);
+
+        journalLines.push({
+          coaId: revenueCoa.id,
+          type: 'CREDIT',
+          amount: revenueAmount,
+          description: `Pendapatan dari invoice ${invoice.invoiceNumber}`,
+          contactId: invoice.contactId ?? null,
+        });
+
+        // Credit Hutang PPN jika ada
+        if (ppnDecimal.gt(0)) {
+          const ppnCoa = await tx.chartOfAccount.findFirst({ where: { companyId, code: '2-002' } });
+          if (ppnCoa) {
+            journalLines.push({
+              coaId: ppnCoa.id,
+              type: 'CREDIT',
+              amount: ppnDecimal,
+              description: `Utang PPN invoice ${invoice.invoiceNumber}`,
+              contactId: null,
+            });
+          }
+        }
+
+        // Credit Hutang PPh / withholding tax lainnya jika ada
+        if (withholdingDecimal.gt(0) && invoice.taxConfig) {
+          const taxTypeToCoa: Partial<Record<TaxType, string>> = {
+            [TaxType.PPH_21]: '2-003',
+            [TaxType.PPH_22]: '2-004',
+            [TaxType.PPH_23]: '2-005',
+            [TaxType.PPH_4_2]: '2-006',
+            [TaxType.PPH_15]: '2-007',
+          };
+          const withholdingCoaCode = taxTypeToCoa[invoice.taxConfig.type];
+          if (withholdingCoaCode) {
+            const withholdingCoa = await tx.chartOfAccount.findFirst({
+              where: { companyId, code: withholdingCoaCode },
+            });
+            if (withholdingCoa) {
+              journalLines.push({
+                coaId: withholdingCoa.id,
+                type: 'CREDIT',
+                amount: withholdingDecimal,
+                description: `Utang ${invoice.taxConfig.name} invoice ${invoice.invoiceNumber}`,
+                contactId: null,
+              });
+            }
+          }
+        }
+      } else {
+        // Pembayaran sebagian: credit revenue sebesar payNow (tanpa pemisahan pajak)
+        journalLines.push({
           coaId: revenueCoa.id,
           type: 'CREDIT',
           amount: payNow,
           description: `Pendapatan dari invoice ${invoice.invoiceNumber}`,
           contactId: invoice.contactId ?? null,
-        },
-      ];
-
-      if (isFullyPaid) {
-        const taxDecimal = new Prisma.Decimal(invoice.taxAmount.toString());
-        if (taxDecimal.gt(0)) {
-          const taxCoa = await tx.chartOfAccount.findFirst({ where: { companyId, code: '2-002' } });
-          if (taxCoa) {
-            journalLines.push(
-              {
-                coaId: revenueCoa.id,
-                type: 'DEBIT',
-                amount: taxDecimal,
-                description: `${invoice.taxConfig?.name ?? 'Pajak'} dari invoice ${invoice.invoiceNumber}`,
-                contactId: null,
-              },
-              {
-                coaId: taxCoa.id,
-                type: 'CREDIT',
-                amount: taxDecimal,
-                description: `Utang ${invoice.taxConfig?.name ?? 'Pajak'} invoice ${invoice.invoiceNumber}`,
-                contactId: null,
-              },
-            );
-          }
-        }
+        });
       }
 
       await tx.journalEntry.create({
