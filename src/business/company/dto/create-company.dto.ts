@@ -8,6 +8,7 @@ import {
   Max,
   Min,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateCompanyDto {
   @IsNotEmpty({ message: 'Company name is required' })
@@ -35,6 +36,7 @@ export class CreateCompanyDto {
   taxEnabled?: boolean;
 
   @IsOptional()
+  @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   @Max(100)
