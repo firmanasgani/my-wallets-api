@@ -382,7 +382,7 @@ export function buildInvoiceEmailHtml(data: InvoiceEmailData): string {
         <tr>
           <td style="padding:16px 28px 24px;text-align:center;">
             <p style="margin:0;font-size:11px;color:#94a3b8;line-height:1.6;">
-              Invoice ini dibuat otomatis oleh <strong style="color:#6366f1;">MyWallets</strong>.<br />
+              Invoice ini dibuat otomatis oleh <strong style="color:#6366f1;">Moneytory</strong>.<br />
               Dicetak pada ${printedAt}
             </p>
           </td>
