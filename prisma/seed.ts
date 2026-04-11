@@ -2,6 +2,12 @@ import { PrismaClient, SubscriptionStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 const prisma = new PrismaClient();
 
+/**
+ * Seed initial bank records and subscription plans into the database.
+ *
+ * Performs upserts for banks (matched by `code`, updating `name`) and for subscription plans
+ * (matched by `code`, updating `price` and `discountPrice`, creating missing records).
+ */
 async function main() {
   console.log(`Start Seeding ...`);
 
