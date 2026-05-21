@@ -51,12 +51,23 @@ export interface InvoiceEmailData {
   taxConfigRate: string | null;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+/**
+ * Format a numeric value as an Indonesian Rupiah currency string.
+ *
+ * @param value - A number or Prisma.Decimal representing the amount to format
+ * @returns The amount formatted with Indonesian locale grouping and prefixed with `Rp `
+ */
 
 function formatRupiah(value: Prisma.Decimal | number): string {
   return `Rp ${Number(value).toLocaleString('id-ID')}`;
 }
 
+/**
+ * Formats a Date to Indonesian long-date form (e.g., "1 Januari 2026").
+ *
+ * @param date - The date to format
+ * @returns The formatted date string in "day month year" using the Indonesian locale
+ */
 function formatDate(date: Date): string {
   return date.toLocaleDateString('id-ID', {
     day: 'numeric',
@@ -65,6 +76,12 @@ function formatDate(date: Date): string {
   });
 }
 
+/**
+ * Formats a Date into an Indonesian locale date and time string.
+ *
+ * @param date - The Date to format
+ * @returns A string in the form "day month year HH:MM" using the 'id-ID' locale
+ */
 function formatDateTime(date: Date): string {
   return date.toLocaleString('id-ID', {
     day: 'numeric',
@@ -75,6 +92,12 @@ function formatDateTime(date: Date): string {
   });
 }
 
+/**
+ * Map an invoice status to its display label.
+ *
+ * @param status - The invoice status to convert into a human-readable label
+ * @returns The label corresponding to `status` (e.g., `DRAFT`, `TERKIRIM`, `LUNAS`, `TERLAMBAT`)
+ */
 function statusLabel(status: InvoiceStatus): string {
   const map: Record<InvoiceStatus, string> = {
     DRAFT: 'DRAFT',
@@ -85,6 +108,12 @@ function statusLabel(status: InvoiceStatus): string {
   return map[status];
 }
 
+/**
+ * Map an invoice status to its corresponding background hex color.
+ *
+ * @param status - The invoice status to map to a background color
+ * @returns The hex color string associated with `status`
+ */
 function statusBgColor(status: InvoiceStatus): string {
   const map: Record<InvoiceStatus, string> = {
     DRAFT: '#94a3b8',
@@ -95,6 +124,16 @@ function statusBgColor(status: InvoiceStatus): string {
   return map[status];
 }
 
+/**
+ * Builds HTML table rows for the given invoice line items.
+ *
+ * Produces a concatenated string of <tr> elements where each row contains cells for
+ * description, quantity, unit price, discount (shown as `-Rp ...` when present, `-` otherwise),
+ * tax (shown as `X%` when present, `-` otherwise), and the line total.
+ *
+ * @param items - The invoice line items to render as table rows
+ * @returns An HTML string containing one `<tr>` per item with cells for description, quantity, unit price, discount, tax, and total
+ */
 function buildItemRows(items: InvoiceEmailItem[]): string {
   return items
     .map((item) => {
@@ -113,6 +152,11 @@ function buildItemRows(items: InvoiceEmailItem[]): string {
     .join('');
 }
 
+/**
+ * Builds the bank transfer section used in the invoice email.
+ *
+ * @returns The HTML string for a bank transfer section (table containing bank name, account number, and account holder), or an empty string when neither `bankName` nor `bankAccountNumber` is provided.
+ */
 function buildBankSection(
   bankName: string | null,
   bankAccountNumber: string | null,
@@ -132,6 +176,12 @@ function buildBankSection(
     </table>`;
 }
 
+/**
+ * Render an HTML "Catatan" (notes) section for the invoice email.
+ *
+ * @param notes - The notes text to include; when `null` or an empty string no section is produced.
+ * @returns An HTML table string containing the notes section, or an empty string if `notes` is `null` or an empty string.
+ */
 function buildNotesSection(notes: string | null): string {
   if (!notes) return '';
   return `
@@ -145,6 +195,13 @@ function buildNotesSection(notes: string | null): string {
     </table>`;
 }
 
+/**
+ * Builds HTML table rows showing amount already paid and remaining balance when there is a partial payment.
+ *
+ * @param totalAmount - The invoice total amount as a Prisma.Decimal
+ * @param amountPaid - The amount already paid as a Prisma.Decimal
+ * @returns An HTML string containing two table rows: "Sudah Dibayar" with the paid amount and "Sisa Tagihan" with the remaining amount, or an empty string if `amountPaid` is less than or equal to zero
+ */
 function buildPartialPaymentRows(
   totalAmount: Prisma.Decimal,
   amountPaid: Prisma.Decimal,
@@ -162,7 +219,19 @@ function buildPartialPaymentRows(
     </tr>`;
 }
 
-// ─── Main builder ─────────────────────────────────────────────────────────────
+/**
+ * Builds a complete email-ready HTML invoice from the provided invoice data.
+ *
+ * The generated HTML is an Indonesian, table-based email template that includes
+ * company and client details, an items table, totals, and optional sections
+ * such as bank transfer details, notes, PPN (VAT), withholding tax, and
+ * partial-payment rows when applicable.
+ *
+ * @param data - InvoiceEmailData containing company info, invoice metadata,
+ *   client info, monetary totals, line items, optional bank and notes fields,
+ *   and tax/withholding configuration used to conditionally render sections.
+ * @returns An HTML string representing the full invoice email template.
+ */
 
 export function buildInvoiceEmailHtml(data: InvoiceEmailData): string {
   const {
