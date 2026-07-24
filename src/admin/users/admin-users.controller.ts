@@ -30,12 +30,14 @@ export class AdminUsersController {
     @Query('limit') limit?: string,
     @Query('search') search?: string,
     @Query('isActive') isActive?: string,
+    @Query('segment') segment?: 'active_subscribers' | 'free',
   ) {
     return this.adminUsersService.findAll({
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
       search,
       isActive: isActive === undefined ? undefined : isActive === 'true',
+      segment,
     });
   }
 
@@ -70,6 +72,10 @@ export class AdminUsersController {
     @Body() dto: ResetPasswordDto,
     @CurrentAdmin() actingAdmin: Omit<Admin, 'passwordHash'>,
   ) {
-    return this.adminUsersService.resetPassword(id, actingAdmin.id, dto.newPassword);
+    return this.adminUsersService.resetPassword(
+      id,
+      actingAdmin.id,
+      dto.newPassword,
+    );
   }
 }

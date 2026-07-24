@@ -7,6 +7,7 @@ import { AdminPaymentsModule } from './payments/admin-payments.module';
 import { AdminSubscriptionPlansModule } from './subscription-plans/admin-subscription-plans.module';
 import { AdminSubscriptionsModule } from './subscriptions/admin-subscriptions.module';
 import { AdminAnnouncementsModule } from './announcements/admin-announcements.module';
+import { AdminEmailBlastsModule } from './email-blasts/admin-email-blasts.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { AdminAnnouncementsModule } from './announcements/admin-announcements.mo
     AdminSubscriptionPlansModule,
     AdminSubscriptionsModule,
     AdminAnnouncementsModule,
+    AdminEmailBlastsModule,
   ],
 })
 export class AdminModule {}

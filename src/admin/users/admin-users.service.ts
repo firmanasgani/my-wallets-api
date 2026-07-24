@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { LogActionType, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -16,6 +20,7 @@ export class AdminUsersService {
     limit?: number;
     search?: string;
     isActive?: boolean;
+    segment?: 'active_subscribers' | 'free';
   }) {
     const page = params.page && params.page > 0 ? params.page : 1;
     const limit = params.limit && params.limit > 0 ? params.limit : 20;
@@ -29,6 +34,11 @@ export class AdminUsersService {
         { email: { contains: params.search, mode: 'insensitive' } },
         { fullName: { contains: params.search, mode: 'insensitive' } },
       ];
+    }
+    if (params.segment === 'active_subscribers') {
+      where.subscriptions = { some: { status: 'ACTIVE' } };
+    } else if (params.segment === 'free') {
+      where.subscriptions = { none: { status: 'ACTIVE' } };
     }
 
     const [data, total] = await Promise.all([

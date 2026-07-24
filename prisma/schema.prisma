@@ -35,6 +35,7 @@ model User {
   paymentTransactions   PaymentTransaction[]
   FinancialGoals        FinancialGoal[]
   conversation          Conversation?
+  emailBlastRecipients  EmailBlastRecipient[]
 
   // Business relations
   ownedCompany            Company?                 @relation("CompanyOwner")
@@ -271,6 +272,13 @@ enum LogActionType {
   ANNOUNCEMENT_CREATE
   ANNOUNCEMENT_UPDATE
   ANNOUNCEMENT_DELETE
+  EMAIL_BLAST_CREATE
+  EMAIL_BLAST_UPDATE
+  EMAIL_BLAST_DELETE
+  EMAIL_BLAST_SCHEDULE
+  EMAIL_BLAST_CANCEL
+  EMAIL_BLAST_SENT
+  EMAIL_BLAST_FAILED
 }
 
 model PaymentTransaction {
@@ -923,6 +931,7 @@ model Admin {
   sentMessages     Message[]            @relation("MessageSenderAdmin")
   assignedThreads  Conversation[]       @relation("ConversationAssignedAdmin")
   logs             Log[]
+  emailBlasts      EmailBlast[]
 }
 
 model Announcement {
@@ -938,6 +947,57 @@ model Announcement {
   updatedAt        DateTime  @updatedAt
 
   @@index([isActive, startsAt, endsAt])
+}
+
+enum EmailBlastStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+enum EmailBlastRecipientStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model EmailBlast {
+  id               String           @id @default(uuid())
+  subject          String
+  content          String
+  status           EmailBlastStatus @default(DRAFT)
+  scheduledAt      DateTime?
+  sentAt           DateTime?
+  totalRecipients  Int              @default(0)
+  sentCount        Int              @default(0)
+  failedCount      Int              @default(0)
+  errorMessage     String?
+  createdByAdminId String
+  createdBy        Admin            @relation(fields: [createdByAdminId], references: [id])
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  recipients EmailBlastRecipient[]
+
+  @@index([status, scheduledAt])
+}
+
+model EmailBlastRecipient {
+  id           String                    @id @default(uuid())
+  emailBlastId String
+  emailBlast   EmailBlast                @relation(fields: [emailBlastId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email        String
+  status       EmailBlastRecipientStatus @default(PENDING)
+  sentAt       DateTime?
+  error        String?
+
+  @@unique([emailBlastId, userId])
+  @@index([emailBlastId, status])
 }
 
 enum ConversationStatus {
