@@ -27,15 +27,27 @@ export class ChatService {
     return this.prisma.conversation.create({ data: { userId } });
   }
 
-  findConversations(params: { status?: ConversationStatus }) {
-    return this.prisma.conversation.findMany({
+  async findConversations(params: { status?: ConversationStatus }) {
+    const conversations = await this.prisma.conversation.findMany({
       where: params.status ? { status: params.status } : undefined,
       orderBy: { lastMessageAt: 'desc' },
       include: {
         user: { select: { id: true, username: true, email: true, fullName: true } },
         assignedAdmin: { select: { id: true, username: true } },
+        _count: {
+          select: {
+            messages: {
+              where: { senderType: MessageSenderType.USER, isRead: false },
+            },
+          },
+        },
       },
     });
+
+    return conversations.map(({ _count, ...conversation }) => ({
+      ...conversation,
+      unreadCount: _count.messages,
+    }));
   }
 
   async getMessages(conversationId: string, page = 1, limit = 30) {
