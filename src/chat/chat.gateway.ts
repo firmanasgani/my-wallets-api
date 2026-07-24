@@ -13,7 +13,7 @@ import { Server, Socket } from 'socket.io';
 import { MessageSenderType } from '@prisma/client';
 import { UsersService } from 'src/users/users.service';
 import { AdminsService } from 'src/admin/admins/admins.service';
-import { ChatService } from './chat.service';
+import { ChatService, redactSenderAdmin } from './chat.service';
 import { SendMessageDto } from './dto/send-message.dto';
 
 interface ChatActor {
@@ -105,13 +105,32 @@ export class ChatGateway implements OnGatewayInit {
             dto.attachmentUrl,
           );
 
-    // Chain .to() calls into a single emit — Socket.IO de-dupes sockets that
-    // belong to both target rooms, so an admin who has this conversation
-    // open doesn't receive the broadcast twice.
-    this.server
-      .to(`conversation:${message.conversationId}`)
-      .to(ChatGateway.ADMINS_ROOM)
-      .emit('newMessage', message);
+    await this.broadcastNewMessage(message);
+  }
+
+  /**
+   * Sends the full message (with sender-admin identity) to admin sockets,
+   * and a redacted copy (identity stripped — admin-only info) to the
+   * customer. Rooms overlap (an admin viewing this thread is in both the
+   * conversation room and the admins room), so we resolve sockets once and
+   * emit per-socket instead of a single shared `.to().emit()` payload.
+   */
+  private async broadcastNewMessage(message: Awaited<ReturnType<ChatService['sendMessageAsUser']>>) {
+    const [conversationSockets, adminSockets] = await Promise.all([
+      this.server.in(`conversation:${message.conversationId}`).fetchSockets(),
+      this.server.in(ChatGateway.ADMINS_ROOM).fetchSockets(),
+    ]);
+
+    const targets = new Map<string, (typeof conversationSockets)[number]>();
+    for (const socket of [...conversationSockets, ...adminSockets]) {
+      targets.set(socket.id, socket);
+    }
+
+    const redacted = redactSenderAdmin(message);
+    for (const socket of targets.values()) {
+      const isAdmin = (socket.data as { actor?: ChatActor }).actor?.type === 'admin';
+      socket.emit('newMessage', isAdmin ? message : redacted);
+    }
   }
 
   @SubscribeMessage('markRead')

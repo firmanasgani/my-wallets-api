@@ -1,6 +1,18 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { ConversationStatus, MessageSenderType } from '@prisma/client';
+import { ConversationStatus, MessageSenderType, Message, Admin } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
+
+type MessageWithSenderAdmin = Message & {
+  senderAdmin: Pick<Admin, 'id' | 'username' | 'fullName'> | null;
+};
+
+/**
+ * The admin's identity is admin-only information (see ChatGateway/ChatController
+ * usage) — customers must never receive it, over REST or the live socket.
+ */
+export function redactSenderAdmin(message: MessageWithSenderAdmin): MessageWithSenderAdmin {
+  return { ...message, senderAdmin: null };
+}
 
 @Injectable()
 export class ChatService {
@@ -39,6 +51,9 @@ export class ChatService {
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
+        include: {
+          senderAdmin: { select: { id: true, username: true, fullName: true } },
+        },
       }),
       this.prisma.message.count({ where: { conversationId } }),
     ]);
@@ -64,6 +79,9 @@ export class ChatService {
         senderUserId: userId,
         content,
         attachmentUrl,
+      },
+      include: {
+        senderAdmin: { select: { id: true, username: true, fullName: true } },
       },
     });
 
@@ -93,6 +111,9 @@ export class ChatService {
         senderAdminId: adminId,
         content,
         attachmentUrl,
+      },
+      include: {
+        senderAdmin: { select: { id: true, username: true, fullName: true } },
       },
     });
 
