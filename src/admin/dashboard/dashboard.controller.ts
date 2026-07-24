@@ -25,6 +25,11 @@ export class DashboardController {
     const rangeFrom = from ? new Date(from) : defaultFrom;
     const rangeTo = to ? new Date(to) : now;
 
-    return this.dashboardService.getDashboard(actingAdmin.role, actingAdmin.id, rangeFrom, rangeTo);
+    return this.dashboardService.getDashboard(
+      actingAdmin.role,
+      actingAdmin.id,
+      rangeFrom,
+      rangeTo,
+    );
   }
 }

@@ -22,17 +22,25 @@ export class DashboardService {
    */
   async getDashboard(role: AdminRole, adminId: string, from: Date, to: Date) {
     if (role === AdminRole.SUPERADMIN) {
-      const [chat, users, payments, subscriptions, emailBlasts, announcements, admins, recentActivity] =
-        await Promise.all([
-          this.getChatStats(),
-          this.getUserStats(from, to),
-          this.getPaymentStats(from, to),
-          this.getSubscriptionStats(),
-          this.getEmailBlastStats(),
-          this.getAnnouncementStats(),
-          this.getAdminStats(),
-          this.getRecentActivity(),
-        ]);
+      const [
+        chat,
+        users,
+        payments,
+        subscriptions,
+        emailBlasts,
+        announcements,
+        admins,
+        recentActivity,
+      ] = await Promise.all([
+        this.getChatStats(),
+        this.getUserStats(from, to),
+        this.getPaymentStats(from, to),
+        this.getSubscriptionStats(),
+        this.getEmailBlastStats(),
+        this.getAnnouncementStats(),
+        this.getAdminStats(),
+        this.getRecentActivity(),
+      ]);
       return {
         role,
         chat,
@@ -47,30 +55,54 @@ export class DashboardService {
     }
 
     if (role === AdminRole.SALES) {
-      const [chat, users, payments, subscriptions, emailBlasts, announcements] = await Promise.all([
-        this.getChatStats(),
-        this.getUserStats(from, to),
-        this.getPaymentStats(from, to),
-        this.getSubscriptionStats(),
-        this.getEmailBlastStats(),
-        this.getAnnouncementStats(),
-      ]);
-      return { role, chat, users, payments, subscriptions, emailBlasts, announcements };
+      const [chat, users, payments, subscriptions, emailBlasts, announcements] =
+        await Promise.all([
+          this.getChatStats(),
+          this.getUserStats(from, to),
+          this.getPaymentStats(from, to),
+          this.getSubscriptionStats(),
+          this.getEmailBlastStats(),
+          this.getAnnouncementStats(),
+        ]);
+      return {
+        role,
+        chat,
+        users,
+        payments,
+        subscriptions,
+        emailBlasts,
+        announcements,
+      };
     }
 
     // AGENT: chat is their job; a light read-only user snapshot for context.
-    const [chat, users] = await Promise.all([this.getChatStats(), this.getUserStats(from, to)]);
-    return { role, chat, users, assignedToMe: await this.getAssignedConversationCount(adminId) };
+    const [chat, users] = await Promise.all([
+      this.getChatStats(),
+      this.getUserStats(from, to),
+    ]);
+    return {
+      role,
+      chat,
+      users,
+      assignedToMe: await this.getAssignedConversationCount(adminId),
+    };
   }
 
   private async getChatStats() {
-    const [openConversations, totalConversations, unreadConversations] = await Promise.all([
-      this.prisma.conversation.count({ where: { status: ConversationStatus.OPEN } }),
-      this.prisma.conversation.count(),
-      this.prisma.conversation.count({
-        where: { messages: { some: { senderType: MessageSenderType.USER, isRead: false } } },
-      }),
-    ]);
+    const [openConversations, totalConversations, unreadConversations] =
+      await Promise.all([
+        this.prisma.conversation.count({
+          where: { status: ConversationStatus.OPEN },
+        }),
+        this.prisma.conversation.count(),
+        this.prisma.conversation.count({
+          where: {
+            messages: {
+              some: { senderType: MessageSenderType.USER, isRead: false },
+            },
+          },
+        }),
+      ]);
     return { openConversations, totalConversations, unreadConversations };
   }
 
@@ -85,7 +117,9 @@ export class DashboardService {
       this.prisma.user.count(),
       this.prisma.user.count({ where: { isActive: true } }),
       this.prisma.user.count({
-        where: { subscriptions: { some: { status: SubscriptionStatus.ACTIVE } } },
+        where: {
+          subscriptions: { some: { status: SubscriptionStatus.ACTIVE } },
+        },
       }),
       this.prisma.user.findMany({
         where: { createdAt: { gte: from, lte: to } },
@@ -104,24 +138,39 @@ export class DashboardService {
   }
 
   private async getPaymentStats(from: Date, to: Date) {
-    const [pendingReviewCount, totalRevenue, successCount, failedCount, paymentsInRange] =
-      await Promise.all([
-        this.prisma.paymentTransaction.count({
-          where: { status: PaymentStatus.PENDING_REVIEW },
-        }),
-        this.prisma.paymentTransaction.aggregate({
-          where: { status: PaymentStatus.SUCCESS },
-          _sum: { amount: true },
-        }),
-        this.prisma.paymentTransaction.count({ where: { status: PaymentStatus.SUCCESS } }),
-        this.prisma.paymentTransaction.count({ where: { status: PaymentStatus.FAILED } }),
-        this.prisma.paymentTransaction.findMany({
-          where: { status: PaymentStatus.SUCCESS, createdAt: { gte: from, lte: to } },
-          select: { createdAt: true, amount: true },
-        }),
-      ]);
+    const [
+      pendingReviewCount,
+      totalRevenue,
+      successCount,
+      failedCount,
+      paymentsInRange,
+    ] = await Promise.all([
+      this.prisma.paymentTransaction.count({
+        where: { status: PaymentStatus.PENDING_REVIEW },
+      }),
+      this.prisma.paymentTransaction.aggregate({
+        where: { status: PaymentStatus.SUCCESS },
+        _sum: { amount: true },
+      }),
+      this.prisma.paymentTransaction.count({
+        where: { status: PaymentStatus.SUCCESS },
+      }),
+      this.prisma.paymentTransaction.count({
+        where: { status: PaymentStatus.FAILED },
+      }),
+      this.prisma.paymentTransaction.findMany({
+        where: {
+          status: PaymentStatus.SUCCESS,
+          createdAt: { gte: from, lte: to },
+        },
+        select: { createdAt: true, amount: true },
+      }),
+    ]);
 
-    const revenueInRange = paymentsInRange.reduce((sum, payment) => sum + Number(payment.amount), 0);
+    const revenueInRange = paymentsInRange.reduce(
+      (sum, payment) => sum + Number(payment.amount),
+      0,
+    );
 
     return {
       pendingReviewCount,
@@ -139,7 +188,9 @@ export class DashboardService {
     sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
 
     const [activeCount, expiringSoonCount, planPopularity] = await Promise.all([
-      this.prisma.userSubscription.count({ where: { status: SubscriptionStatus.ACTIVE } }),
+      this.prisma.userSubscription.count({
+        where: { status: SubscriptionStatus.ACTIVE },
+      }),
       this.prisma.userSubscription.count({
         where: {
           status: SubscriptionStatus.ACTIVE,
@@ -154,7 +205,9 @@ export class DashboardService {
     ]);
 
     const plans = await this.prisma.subscriptionPlan.findMany({
-      where: { id: { in: planPopularity.map((row) => row.subscriptionPlanId) } },
+      where: {
+        id: { in: planPopularity.map((row) => row.subscriptionPlanId) },
+      },
       select: { id: true, name: true },
     });
     const planNameById = new Map(plans.map((plan) => [plan.id, plan.name]));
@@ -177,13 +230,26 @@ export class DashboardService {
         where: { status: EmailBlastStatus.SCHEDULED },
         orderBy: { scheduledAt: 'asc' },
         take: 5,
-        select: { id: true, subject: true, scheduledAt: true, totalRecipients: true },
+        select: {
+          id: true,
+          subject: true,
+          scheduledAt: true,
+          totalRecipients: true,
+        },
       }),
       this.prisma.emailBlast.findMany({
-        where: { status: { in: [EmailBlastStatus.SENT, EmailBlastStatus.FAILED] } },
+        where: {
+          status: { in: [EmailBlastStatus.SENT, EmailBlastStatus.FAILED] },
+        },
         orderBy: { sentAt: 'desc' },
         take: 5,
-        select: { id: true, subject: true, sentCount: true, failedCount: true, sentAt: true },
+        select: {
+          id: true,
+          subject: true,
+          sentCount: true,
+          failedCount: true,
+          sentAt: true,
+        },
       }),
     ]);
     return { scheduledUpcoming, recentSent };
@@ -202,7 +268,10 @@ export class DashboardService {
   }
 
   private async getAdminStats() {
-    const byRoleRaw = await this.prisma.admin.groupBy({ by: ['role'], _count: true });
+    const byRoleRaw = await this.prisma.admin.groupBy({
+      by: ['role'],
+      _count: true,
+    });
     const total = byRoleRaw.reduce((sum, row) => sum + row._count, 0);
     return {
       total,
@@ -259,7 +328,8 @@ export class DashboardService {
     const sums = new Map(days.map((day) => [day, 0]));
     for (const row of rows) {
       const key = row.createdAt.toISOString().slice(0, 10);
-      if (sums.has(key)) sums.set(key, (sums.get(key) ?? 0) + Number(row.amount));
+      if (sums.has(key))
+        sums.set(key, (sums.get(key) ?? 0) + Number(row.amount));
     }
     return days.map((date) => ({ date, amount: sums.get(date) ?? 0 }));
   }
