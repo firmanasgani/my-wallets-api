@@ -1,4 +1,4 @@
-import { PrismaClient, SubscriptionStatus } from '@prisma/client';
+import { PrismaClient, SubscriptionStatus, AdminRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 const prisma = new PrismaClient();
 
@@ -401,6 +401,31 @@ async function main() {
   //     }
   //   }
   // }
+
+  // --- First SUPERADMIN account ---
+  const superadminEmail = process.env.SEED_SUPERADMIN_EMAIL || 'superadmin@moneytory.my.id';
+  const superadminUsername = process.env.SEED_SUPERADMIN_USERNAME || 'superadmin';
+  const superadminPassword = process.env.SEED_SUPERADMIN_PASSWORD || 'SuperAdmin123!';
+
+  const existingSuperadmin = await prisma.admin.findFirst({
+    where: { role: AdminRole.SUPERADMIN },
+  });
+
+  if (!existingSuperadmin) {
+    const passwordHash = await bcrypt.hash(superadminPassword, 10);
+    await prisma.admin.create({
+      data: {
+        username: superadminUsername,
+        email: superadminEmail,
+        passwordHash,
+        fullName: 'Super Admin',
+        role: AdminRole.SUPERADMIN,
+      },
+    });
+    console.log(
+      `Seeded first SUPERADMIN: ${superadminEmail} / (password from SEED_SUPERADMIN_PASSWORD or default — change it immediately)`,
+    );
+  }
 
   console.log('Seeding completed.');
 }

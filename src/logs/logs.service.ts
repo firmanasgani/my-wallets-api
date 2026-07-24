@@ -20,6 +20,7 @@ export class LogsService {
       };
 
       if (data.userId) logData.user = { connect: { id: data.userId } };
+      if (data.adminId) logData.admin = { connect: { id: data.adminId } };
 
       return await this.prisma.log.create({
         data: logData,

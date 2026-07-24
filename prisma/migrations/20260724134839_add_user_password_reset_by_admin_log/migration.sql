@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "LogActionType" ADD VALUE 'USER_PASSWORD_RESET_BY_ADMIN';

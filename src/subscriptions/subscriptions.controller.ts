@@ -6,7 +6,11 @@ import {
   Param,
   Request,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { SubscriptionsService } from './subscriptions.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
@@ -43,6 +47,24 @@ export class SubscriptionsController {
   @Post('resume-payment')
   async resumePayment(@Body() body: { orderId: string }, @Request() req) {
     return this.subscriptionsService.resumePayment(req.user.id, body.orderId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('manual-payment')
+  @UseInterceptors(FileInterceptor('file'))
+  async submitManualPayment(
+    @Body() body: { planCode: string },
+    @UploadedFile() file: Express.Multer.File,
+    @Request() req,
+  ) {
+    if (!file) {
+      throw new BadRequestException('Proof of transfer file is required');
+    }
+    return this.subscriptionsService.submitManualPayment(
+      req.user.id,
+      body.planCode,
+      file,
+    );
   }
 
   @Post('midtrans-webhook')

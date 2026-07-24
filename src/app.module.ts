@@ -20,6 +20,9 @@ import { ReportsModule } from './reports/reports.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { FinancialGoalsModule } from './financial-goals/financial-goals.module';
 import { BusinessModule } from './business/business.module';
+import { AdminModule } from './admin/admin.module';
+import { AnnouncementsModule } from './announcements/announcements.module';
+import { ChatModule } from './chat/chat.module';
 
 @Module({
   imports: [
@@ -45,6 +48,9 @@ import { BusinessModule } from './business/business.module';
     SubscriptionsModule,
     FinancialGoalsModule,
     BusinessModule,
+    AdminModule,
+    AnnouncementsModule,
+    ChatModule,
   ],
   controllers: [AppController],
   providers: [

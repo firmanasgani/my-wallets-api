@@ -8,14 +8,17 @@ datasource db {
 }
 
 model User {
-  id             String   @id @default(uuid())
-  username       String   @unique
-  email          String   @unique
-  passwordHash   String   @unique
-  fullName       String?
-  profilePicture String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                String    @id @default(uuid())
+  username          String    @unique
+  email             String    @unique
+  passwordHash      String    @unique
+  fullName          String?
+  profilePicture    String?
+  isActive          Boolean   @default(true)
+  deactivatedAt     DateTime?
+  deactivatedReason String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   resetPasswordOtp          String?
   resetPasswordOtpExpires   DateTime?
@@ -31,17 +34,18 @@ model User {
   subscriptions         UserSubscription[]
   paymentTransactions   PaymentTransaction[]
   FinancialGoals        FinancialGoal[]
+  conversation          Conversation?
 
   // Business relations
-  ownedCompany                 Company?                 @relation("CompanyOwner")
-  companyMembers               CompanyMember[]
-  createdInvoices              Invoice[]
-  createdJournalEntries        JournalEntry[]           @relation("JournalCreator")
-  checkedJournalEntries        JournalEntry[]           @relation("JournalChecker")
-  approvedJournalEntries       JournalEntry[]           @relation("JournalApprover")
-  invoiceAttachments           InvoiceAttachment[]      @relation("InvoiceAttachments")
-  journalEntryAttachments      JournalEntryAttachment[] @relation("JournalEntryUploads")
-  createdAssets                Asset[]
+  ownedCompany            Company?                 @relation("CompanyOwner")
+  companyMembers          CompanyMember[]
+  createdInvoices         Invoice[]
+  createdJournalEntries   JournalEntry[]           @relation("JournalCreator")
+  checkedJournalEntries   JournalEntry[]           @relation("JournalChecker")
+  approvedJournalEntries  JournalEntry[]           @relation("JournalApprover")
+  invoiceAttachments      InvoiceAttachment[]      @relation("InvoiceAttachments")
+  journalEntryAttachments JournalEntryAttachment[] @relation("JournalEntryUploads")
+  createdAssets           Asset[]
 }
 
 model SubscriptionPlan {
@@ -52,6 +56,7 @@ model SubscriptionPlan {
   price          Decimal  @db.Decimal(18, 2)
   discountPrice  Decimal? @db.Decimal(18, 2)
   durationMonths Int? // Number of months
+  isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -246,37 +251,71 @@ enum LogActionType {
   BUSINESS_ASSET_DEPRECIATION_RUN
   BUSINESS_TRANSACTION_CREATE
   BUSINESS_TRANSACTION_DELETE
+
+  // Admin dashboard
+  ADMIN_LOGIN
+  ADMIN_CREATE
+  ADMIN_UPDATE
+  ADMIN_DEACTIVATE
+  ADMIN_ACTIVATE
+  PAYMENT_MANUAL_SUBMITTED
+  PAYMENT_MANUAL_APPROVED
+  PAYMENT_MANUAL_REJECTED
+  SUBSCRIPTION_CANCELLED_BY_ADMIN
+  USER_DEACTIVATED_BY_ADMIN
+  USER_ACTIVATED_BY_ADMIN
+  USER_PASSWORD_RESET_BY_ADMIN
+  PLAN_CREATE
+  PLAN_UPDATE
+  PLAN_DISABLE
+  ANNOUNCEMENT_CREATE
+  ANNOUNCEMENT_UPDATE
+  ANNOUNCEMENT_DELETE
 }
 
 model PaymentTransaction {
-  id               String           @id @default(uuid())
-  orderId          String           @unique
-  userId           String
-  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  planId           String
-  plan             SubscriptionPlan @relation(fields: [planId], references: [id])
-  amount           Decimal          @db.Decimal(18, 2)
-  status           PaymentStatus    @default(PENDING)
-  snapToken        String?
-  midtransResponse Json?
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
+  id                String           @id @default(uuid())
+  orderId           String           @unique
+  userId            String
+  user              User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId            String
+  plan              SubscriptionPlan @relation(fields: [planId], references: [id])
+  amount            Decimal          @db.Decimal(18, 2)
+  status            PaymentStatus    @default(PENDING)
+  method            PaymentMethod    @default(MIDTRANS)
+  snapToken         String?
+  midtransResponse  Json?
+  proofImageUrl     String?
+  approvedByAdminId String?
+  approvedBy        Admin?           @relation("PaymentApprovedBy", fields: [approvedByAdminId], references: [id])
+  approvedAt        DateTime?
+  rejectionReason   String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
 
   @@index([userId, status])
 }
 
 enum PaymentStatus {
   PENDING
+  PENDING_REVIEW
   SUCCESS
   FAILED
   EXPIRED
   CANCELLED
 }
 
+enum PaymentMethod {
+  MIDTRANS
+  MANUAL_TRANSFER
+}
+
 model Log {
   id          String        @id @default(uuid())
   userId      String?
   user        User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  adminId     String?
+  admin       Admin?        @relation(fields: [adminId], references: [id], onDelete: SetNull)
   timestamp   DateTime      @default(now())
   actionType  LogActionType
   entityType  String? // e.g "Account", "Transaction"
@@ -475,16 +514,16 @@ model Company {
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 
-  members         CompanyMember[]
-  chartOfAccounts ChartOfAccount[]
-  contacts        Contact[]
-  invoices        Invoice[]
-  journalEntries  JournalEntry[]
-  bankAccounts    CompanyBankAccount[]
+  members            CompanyMember[]
+  chartOfAccounts    ChartOfAccount[]
+  contacts           Contact[]
+  invoices           Invoice[]
+  journalEntries     JournalEntry[]
+  bankAccounts       CompanyBankAccount[]
   // Phase 8
-  taxConfigs      TaxConfig[]
+  taxConfigs         TaxConfig[]
   taxSuggestionRules TaxSuggestionRule[]
-  assets          Asset[]
+  assets             Asset[]
 }
 
 model CompanyMember {
@@ -510,25 +549,25 @@ model CompanyMember {
 }
 
 model ChartOfAccount {
-  id             String                  @id @default(uuid())
+  id             String                 @id @default(uuid())
   companyId      String
-  company        Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company        Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
   code           String
   name           String
   type           ChartOfAccountType
   // Phase 8: P&L sub-classification (null = not categorised yet)
   subType        ChartOfAccountSubType?
-  openingBalance Decimal                 @default(0) @db.Decimal(18, 2)
-  isSystem       Boolean                 @default(false)
-  createdAt      DateTime                @default(now())
-  updatedAt      DateTime                @updatedAt
+  openingBalance Decimal                @default(0) @db.Decimal(18, 2)
+  isSystem       Boolean                @default(false)
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
 
-  journalLines JournalLine[]
+  journalLines           JournalLine[]
   // Phase 8: asset relations (multiple named to distinguish roles)
-  assetCoa              Asset[] @relation("AssetCoa")
-  accumulatedCoa        Asset[] @relation("AccumulatedCoa")
-  depreciationExpenseCoa Asset[] @relation("DepreciationExpenseCoa")
-  disposalCoa           Asset[] @relation("DisposalCoa")
+  assetCoa               Asset[]       @relation("AssetCoa")
+  accumulatedCoa         Asset[]       @relation("AccumulatedCoa")
+  depreciationExpenseCoa Asset[]       @relation("DepreciationExpenseCoa")
+  disposalCoa            Asset[]       @relation("DisposalCoa")
 
   @@unique([companyId, code])
   @@index([companyId, type])
@@ -612,8 +651,8 @@ model Invoice {
   dueDate              DateTime
   status               InvoiceStatus       @default(DRAFT)
   subtotal             Decimal             @db.Decimal(18, 2)
-  taxAmount            Decimal             @default(0) @db.Decimal(18, 2)   // PPN dari company default
-  withholdingTaxAmount Decimal             @default(0) @db.Decimal(18, 2)   // Pajak dari taxConfig (PPh, dll)
+  taxAmount            Decimal             @default(0) @db.Decimal(18, 2) // PPN dari company default
+  withholdingTaxAmount Decimal             @default(0) @db.Decimal(18, 2) // Pajak dari taxConfig (PPh, dll)
   totalAmount          Decimal             @db.Decimal(18, 2)
   amountPaid           Decimal             @default(0) @db.Decimal(18, 2)
   notes                String?
@@ -641,17 +680,17 @@ model Invoice {
 }
 
 model InvoiceItem {
-  id             String   @id @default(uuid())
+  id             String  @id @default(uuid())
   invoiceId      String
-  invoice        Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice        Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   description    String
-  quantity       Decimal  @db.Decimal(18, 4)
-  unitPrice      Decimal  @db.Decimal(18, 2)
-  discountAmount Decimal  @default(0) @db.Decimal(18, 2)
-  taxable        Boolean  @default(false)
-  taxRate        Decimal  @default(0) @db.Decimal(5, 2)
-  taxAmount      Decimal  @default(0) @db.Decimal(18, 2)
-  total          Decimal  @db.Decimal(18, 2)
+  quantity       Decimal @db.Decimal(18, 4)
+  unitPrice      Decimal @db.Decimal(18, 2)
+  discountAmount Decimal @default(0) @db.Decimal(18, 2)
+  taxable        Boolean @default(false)
+  taxRate        Decimal @default(0) @db.Decimal(5, 2)
+  taxAmount      Decimal @default(0) @db.Decimal(18, 2)
+  total          Decimal @db.Decimal(18, 2)
 
   @@index([invoiceId])
 }
@@ -681,33 +720,33 @@ enum JournalLineType {
 }
 
 model JournalEntry {
-  id                String             @id @default(uuid())
+  id                String   @id @default(uuid())
   companyId         String
-  company           Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   description       String
   transactionDate   DateTime
-  isSystemGenerated Boolean            @default(false)
+  isSystemGenerated Boolean  @default(false)
   invoiceId         String?
-  invoice           Invoice?           @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  invoice           Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   createdByUserId   String
-  createdBy         User               @relation("JournalCreator", fields: [createdByUserId], references: [id])
-  createdAt         DateTime           @default(now())
+  createdBy         User     @relation("JournalCreator", fields: [createdByUserId], references: [id])
+  createdAt         DateTime @default(now())
 
   // Phase 8: approval workflow
   // Default APPROVED so all existing entries remain effective without migration
-  status           JournalEntryStatus @default(APPROVED)
-  checkerUserId    String?
-  checker          User?              @relation("JournalChecker", fields: [checkerUserId], references: [id])
-  approverUserId   String?
-  approver         User?              @relation("JournalApprover", fields: [approverUserId], references: [id])
-  checkedAt        DateTime?
-  approvedAt       DateTime?
-  rejectedAt       DateTime?
-  rejectionNote    String?
+  status         JournalEntryStatus @default(APPROVED)
+  checkerUserId  String?
+  checker        User?              @relation("JournalChecker", fields: [checkerUserId], references: [id])
+  approverUserId String?
+  approver       User?              @relation("JournalApprover", fields: [approverUserId], references: [id])
+  checkedAt      DateTime?
+  approvedAt     DateTime?
+  rejectedAt     DateTime?
+  rejectionNote  String?
 
-  lines            JournalLine[]
+  lines             JournalLine[]
   // Phase 8
-  attachments      JournalEntryAttachment[]
+  attachments       JournalEntryAttachment[]
   assetDepreciation AssetDepreciation?
 
   @@index([companyId, transactionDate])
@@ -758,7 +797,7 @@ model TaxConfig {
   companyId   String
   company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   type        TaxType
-  name        String   // e.g. "PPh 23 – Jasa Konsultan 2%"
+  name        String // e.g. "PPh 23 – Jasa Konsultan 2%"
   rate        Decimal  @db.Decimal(7, 4) // e.g. 2.0000
   isActive    Boolean  @default(true)
   description String?
@@ -779,9 +818,9 @@ model TaxSuggestionRule {
   company            Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
   taxConfigId        String
   taxConfig          TaxConfig    @relation(fields: [taxConfigId], references: [id], onDelete: Cascade)
-  triggerCoaIds      String[]     // match if debit/credit COA is in this list
+  triggerCoaIds      String[] // match if debit/credit COA is in this list
   triggerContactType ContactType? // null = any contact type
-  triggerKeywords    String[]     // match if description contains any keyword (case-insensitive)
+  triggerKeywords    String[] // match if description contains any keyword (case-insensitive)
   minAmount          Decimal?     @db.Decimal(18, 2)
   priority           Int          @default(0)
   note               String?
@@ -809,7 +848,7 @@ model Asset {
   depreciationExpenseCoa   ChartOfAccount     @relation("DepreciationExpenseCoa", fields: [depreciationExpenseCoaId], references: [id])
   assetType                AssetType
   name                     String
-  code                     String             // e.g. "FA-001"
+  code                     String // e.g. "FA-001"
   acquisitionDate          DateTime
   acquisitionCost          Decimal            @db.Decimal(18, 2)
   residualValue            Decimal            @default(0) @db.Decimal(18, 2)
@@ -835,20 +874,108 @@ model Asset {
 }
 
 model AssetDepreciation {
-  id                      String       @id @default(uuid())
+  id                      String        @id @default(uuid())
   assetId                 String
-  asset                   Asset        @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  asset                   Asset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
   companyId               String
   periodYear              Int
-  periodMonth             Int          // 1–12
-  depreciationAmount      Decimal      @db.Decimal(18, 2)
-  accumulatedDepreciation Decimal      @db.Decimal(18, 2)
-  bookValue               Decimal      @db.Decimal(18, 2)
-  unitsProduced           Decimal?     @db.Decimal(18, 4) // UoP only
-  journalEntryId          String?      @unique
+  periodMonth             Int // 1–12
+  depreciationAmount      Decimal       @db.Decimal(18, 2)
+  accumulatedDepreciation Decimal       @db.Decimal(18, 2)
+  bookValue               Decimal       @db.Decimal(18, 2)
+  unitsProduced           Decimal?      @db.Decimal(18, 4) // UoP only
+  journalEntryId          String?       @unique
   journalEntry            JournalEntry? @relation(fields: [journalEntryId], references: [id])
-  createdAt               DateTime     @default(now())
+  createdAt               DateTime      @default(now())
 
   @@unique([assetId, periodYear, periodMonth])
   @@index([companyId, periodYear, periodMonth])
+}
+
+// ─────────────────────────────────────────────
+// ADMIN DASHBOARD
+// ─────────────────────────────────────────────
+
+enum AdminRole {
+  SUPERADMIN
+  SALES
+  AGENT
+}
+
+model Admin {
+  id           String    @id @default(uuid())
+  username     String    @unique
+  email        String    @unique
+  passwordHash String
+  fullName     String?
+  role         AdminRole @default(AGENT)
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  createdByAdminId String?
+  createdBy        Admin?  @relation("AdminCreatedBy", fields: [createdByAdminId], references: [id], onDelete: SetNull)
+  createdAdmins    Admin[] @relation("AdminCreatedBy")
+
+  approvedPayments PaymentTransaction[] @relation("PaymentApprovedBy")
+  announcements    Announcement[]
+  sentMessages     Message[]            @relation("MessageSenderAdmin")
+  assignedThreads  Conversation[]       @relation("ConversationAssignedAdmin")
+  logs             Log[]
+}
+
+model Announcement {
+  id               String    @id @default(uuid())
+  title            String
+  content          String
+  createdByAdminId String
+  createdBy        Admin     @relation(fields: [createdByAdminId], references: [id])
+  isActive         Boolean   @default(true)
+  startsAt         DateTime  @default(now())
+  endsAt           DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([isActive, startsAt, endsAt])
+}
+
+enum ConversationStatus {
+  OPEN
+  CLOSED
+}
+
+model Conversation {
+  id              String             @id @default(uuid())
+  userId          String             @unique
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignedAdminId String?
+  assignedAdmin   Admin?             @relation("ConversationAssignedAdmin", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  status          ConversationStatus @default(OPEN)
+  lastMessageAt   DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  messages Message[]
+}
+
+enum MessageSenderType {
+  USER
+  ADMIN
+}
+
+model Message {
+  id             String            @id @default(uuid())
+  conversationId String
+  conversation   Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderType     MessageSenderType
+  senderUserId   String?
+  senderAdminId  String?
+  senderAdmin    Admin?            @relation("MessageSenderAdmin", fields: [senderAdminId], references: [id], onDelete: SetNull)
+  content        String
+  attachmentUrl  String?
+  isRead         Boolean           @default(false)
+  createdAt      DateTime          @default(now())
+
+  @@index([conversationId, createdAt])
 }

@@ -7,6 +7,10 @@ export class CreateLogDto {
     @IsUUID('4')
     userId?: string
 
+    @IsOptional()
+    @IsUUID('4')
+    adminId?: string
+
     @IsNotEmpty()
     @IsEnum(LogActionType)
     actionType: LogActionType

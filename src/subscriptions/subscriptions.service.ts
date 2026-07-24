@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
@@ -8,12 +9,16 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { LogsService } from '../logs/logs.service';
+import { MinioService } from '../common/minio/minio.service';
 import {
   LogActionType,
+  PaymentMethod,
   PaymentStatus,
+  SubscriptionPlan,
   SubscriptionStatus,
 } from '@prisma/client';
 import * as crypto from 'crypto';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class SubscriptionsService {
@@ -23,11 +28,12 @@ export class SubscriptionsService {
     private prisma: PrismaService,
     private configService: ConfigService,
     private logsService: LogsService,
+    private minioService: MinioService,
   ) {}
 
   async getPlans() {
     return this.prisma.subscriptionPlan.findMany({
-      where: { code: { not: 'BUSINESS_MEMBER' } },
+      where: { code: { not: 'BUSINESS_MEMBER' }, isActive: true },
       orderBy: { price: 'asc' },
     });
   }
@@ -340,42 +346,13 @@ export class SubscriptionsService {
     if (status === PaymentStatus.SUCCESS) {
       // Handle Success: Update user subscription
       const plan = payment.plan;
-      const now = new Date();
-      let endDate: Date | null = null;
 
-      if (plan.durationMonths) {
-        endDate = new Date();
-        endDate.setMonth(now.getMonth() + plan.durationMonths);
-      }
-
-      await this.prisma.$transaction([
-        // Deactivate old active subscriptions
-        this.prisma.userSubscription.updateMany({
-          where: { userId: payment.userId, status: SubscriptionStatus.ACTIVE },
-          data: { status: SubscriptionStatus.EXPIRED },
-        }),
-        // Create new subscription
-        this.prisma.userSubscription.create({
-          data: {
-            userId: payment.userId,
-            subscriptionPlanId: plan.id,
-            status: SubscriptionStatus.ACTIVE,
-            startDate: now,
-            endDate,
-          },
-        }),
-        // Log Success
-        this.prisma.log.create({
-          data: {
-            userId: payment.userId,
-            actionType: LogActionType.PAYMENT_SUCCESS,
-            entityType: 'PaymentTransaction',
-            entityId: payment.id,
-            description: `Payment success for order ${orderId}. Plan upgraded to ${plan.name}`,
-            details: { orderId, planCode: plan.code },
-          },
-        }),
-      ]);
+      await this.activateSubscriptionForPayment({
+        userId: payment.userId,
+        plan,
+        paymentId: payment.id,
+        description: `Payment success for order ${orderId}. Plan upgraded to ${plan.name}`,
+      });
     } else if (status === PaymentStatus.FAILED) {
       // Log Failure
       await this.logsService.create({
@@ -461,36 +438,13 @@ export class SubscriptionsService {
 
       if (isSuccess) {
         const plan = existingPayment.plan;
-        const now = new Date();
-        const endDate = plan.durationMonths
-          ? new Date(now.getFullYear(), now.getMonth() + plan.durationMonths, now.getDate())
-          : null;
 
-        await this.prisma.$transaction([
-          this.prisma.userSubscription.updateMany({
-            where: { userId: existingPayment.userId, status: SubscriptionStatus.ACTIVE },
-            data: { status: SubscriptionStatus.EXPIRED },
-          }),
-          this.prisma.userSubscription.create({
-            data: {
-              userId: existingPayment.userId,
-              subscriptionPlanId: plan.id,
-              status: SubscriptionStatus.ACTIVE,
-              startDate: now,
-              endDate,
-            },
-          }),
-          this.prisma.log.create({
-            data: {
-              userId: existingPayment.userId,
-              actionType: LogActionType.PAYMENT_SUCCESS,
-              entityType: 'PaymentTransaction',
-              entityId: existingPayment.id,
-              description: `Recurring payment success for order ${orderId}. Subscription renewed to ${plan.name}`,
-              details: { orderId, planCode: plan.code },
-            },
-          }),
-        ]);
+        await this.activateSubscriptionForPayment({
+          userId: existingPayment.userId,
+          plan,
+          paymentId: existingPayment.id,
+          description: `Recurring payment success for order ${orderId}. Subscription renewed to ${plan.name}`,
+        });
       } else if (isFailed) {
         await this.logsService.create({
           userId: existingPayment.userId,
@@ -573,36 +527,12 @@ export class SubscriptionsService {
     });
 
     if (isSuccess) {
-      const now = new Date();
-      const endDate = activePlan.durationMonths
-        ? new Date(now.getFullYear(), now.getMonth() + activePlan.durationMonths, now.getDate())
-        : null;
-
-      await this.prisma.$transaction([
-        this.prisma.userSubscription.updateMany({
-          where: { userId: user.id, status: SubscriptionStatus.ACTIVE },
-          data: { status: SubscriptionStatus.EXPIRED },
-        }),
-        this.prisma.userSubscription.create({
-          data: {
-            userId: user.id,
-            subscriptionPlanId: activePlan.id,
-            status: SubscriptionStatus.ACTIVE,
-            startDate: now,
-            endDate,
-          },
-        }),
-        this.prisma.log.create({
-          data: {
-            userId: user.id,
-            actionType: LogActionType.PAYMENT_SUCCESS,
-            entityType: 'PaymentTransaction',
-            entityId: newPayment.id,
-            description: `Auto-recurring payment success for order ${orderId}. Subscription renewed to ${activePlan.name}`,
-            details: { orderId, planCode: activePlan.code },
-          },
-        }),
-      ]);
+      await this.activateSubscriptionForPayment({
+        userId: user.id,
+        plan: activePlan,
+        paymentId: newPayment.id,
+        description: `Auto-recurring payment success for order ${orderId}. Subscription renewed to ${activePlan.name}`,
+      });
     } else if (isFailed) {
       await this.logsService.create({
         userId: user.id,
@@ -655,6 +585,237 @@ export class SubscriptionsService {
     }
 
     return { status: 'OK' };
+  }
+
+  /**
+   * Shared by the Midtrans webhook, the recurring-notification handler, and
+   * the manual-payment admin-approval flow — all three activate a
+   * subscription the same way, so the transaction lives in one place.
+   */
+  private async activateSubscriptionForPayment(params: {
+    userId: string;
+    plan: SubscriptionPlan;
+    paymentId: string;
+    description: string;
+  }) {
+    const { userId, plan, paymentId, description } = params;
+    const now = new Date();
+    const endDate = plan.durationMonths
+      ? new Date(
+          now.getFullYear(),
+          now.getMonth() + plan.durationMonths,
+          now.getDate(),
+        )
+      : null;
+
+    await this.prisma.$transaction([
+      this.prisma.userSubscription.updateMany({
+        where: { userId, status: SubscriptionStatus.ACTIVE },
+        data: { status: SubscriptionStatus.EXPIRED },
+      }),
+      this.prisma.userSubscription.create({
+        data: {
+          userId,
+          subscriptionPlanId: plan.id,
+          status: SubscriptionStatus.ACTIVE,
+          startDate: now,
+          endDate,
+        },
+      }),
+      this.prisma.log.create({
+        data: {
+          userId,
+          actionType: LogActionType.PAYMENT_SUCCESS,
+          entityType: 'PaymentTransaction',
+          entityId: paymentId,
+          description,
+          details: { paymentId, planCode: plan.code },
+        },
+      }),
+    ]);
+  }
+
+  async submitManualPayment(
+    userId: string,
+    planCode: string,
+    file: Express.Multer.File,
+  ) {
+    const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/webp', 'application/pdf'];
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      throw new BadRequestException(
+        'Invalid file type. Only JPEG, PNG, WebP images or PDF are allowed',
+      );
+    }
+    const maxSize = 5 * 1024 * 1024; // 5MB
+    if (file.size > maxSize) {
+      throw new BadRequestException('File size must not exceed 5MB');
+    }
+
+    const plan = await this.getPlanByCode(planCode);
+    const orderId = `MANUAL-${userId.substring(0, 8)}-${Date.now()}`;
+    const amount = Number(plan.discountPrice || plan.price);
+
+    const fileExtension = file.originalname.split('.').pop();
+    const proofImageUrl = `manual-payments/${userId}/${Date.now()}-${randomUUID()}.${fileExtension}`;
+    await this.minioService.uploadFile(file, proofImageUrl);
+
+    const payment = await this.prisma.paymentTransaction.create({
+      data: {
+        orderId,
+        userId,
+        planId: plan.id,
+        amount,
+        method: PaymentMethod.MANUAL_TRANSFER,
+        status: PaymentStatus.PENDING_REVIEW,
+        proofImageUrl,
+      },
+    });
+
+    await this.logsService.create({
+      userId,
+      actionType: LogActionType.PAYMENT_MANUAL_SUBMITTED,
+      entityType: 'PaymentTransaction',
+      entityId: payment.id,
+      description: `User submitted a manual transfer proof for ${plan.name}`,
+      details: { orderId, planCode, amount },
+    });
+
+    return payment;
+  }
+
+  async approveManualPayment(paymentId: string, adminId: string) {
+    const payment = await this.prisma.paymentTransaction.findFirst({
+      where: {
+        id: paymentId,
+        method: PaymentMethod.MANUAL_TRANSFER,
+        status: PaymentStatus.PENDING_REVIEW,
+      },
+      include: { plan: true },
+    });
+    if (!payment) {
+      throw new NotFoundException(
+        'Pending manual payment not found for the given id',
+      );
+    }
+
+    await this.prisma.paymentTransaction.update({
+      where: { id: paymentId },
+      data: {
+        status: PaymentStatus.SUCCESS,
+        approvedByAdminId: adminId,
+        approvedAt: new Date(),
+      },
+    });
+
+    await this.activateSubscriptionForPayment({
+      userId: payment.userId,
+      plan: payment.plan,
+      paymentId: payment.id,
+      description: `Manual payment approved for order ${payment.orderId}. Plan upgraded to ${payment.plan.name}`,
+    });
+
+    await this.logsService.create({
+      userId: payment.userId,
+      adminId,
+      actionType: LogActionType.PAYMENT_MANUAL_APPROVED,
+      entityType: 'PaymentTransaction',
+      entityId: payment.id,
+      description: `Manual payment for order ${payment.orderId} approved by admin`,
+      details: { orderId: payment.orderId, planCode: payment.plan.code },
+    });
+
+    return this.prisma.paymentTransaction.findUnique({
+      where: { id: paymentId },
+      include: { plan: true },
+    });
+  }
+
+  async rejectManualPayment(
+    paymentId: string,
+    adminId: string,
+    reason?: string,
+  ) {
+    const payment = await this.prisma.paymentTransaction.findFirst({
+      where: {
+        id: paymentId,
+        method: PaymentMethod.MANUAL_TRANSFER,
+        status: PaymentStatus.PENDING_REVIEW,
+      },
+    });
+    if (!payment) {
+      throw new NotFoundException(
+        'Pending manual payment not found for the given id',
+      );
+    }
+
+    const updated = await this.prisma.paymentTransaction.update({
+      where: { id: paymentId },
+      data: {
+        status: PaymentStatus.FAILED,
+        approvedByAdminId: adminId,
+        rejectionReason: reason ?? null,
+      },
+    });
+
+    await this.logsService.create({
+      userId: payment.userId,
+      adminId,
+      actionType: LogActionType.PAYMENT_MANUAL_REJECTED,
+      entityType: 'PaymentTransaction',
+      entityId: payment.id,
+      description: `Manual payment for order ${payment.orderId} rejected by admin`,
+      details: { orderId: payment.orderId, reason },
+    });
+
+    return updated;
+  }
+
+  async listPayments(params: {
+    page?: number;
+    limit?: number;
+    status?: PaymentStatus;
+    method?: PaymentMethod;
+  }) {
+    const page = params.page && params.page > 0 ? params.page : 1;
+    const limit = params.limit && params.limit > 0 ? params.limit : 20;
+    const skip = (page - 1) * limit;
+
+    const where: { status?: PaymentStatus; method?: PaymentMethod } = {};
+    if (params.status) where.status = params.status;
+    if (params.method) where.method = params.method;
+
+    const [data, total] = await Promise.all([
+      this.prisma.paymentTransaction.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          plan: { select: { name: true, code: true } },
+          user: { select: { id: true, username: true, email: true } },
+        },
+      }),
+      this.prisma.paymentTransaction.count({ where }),
+    ]);
+
+    const dataWithResolvedProof = await Promise.all(
+      data.map(async (payment) => {
+        if (!payment.proofImageUrl) return payment;
+        try {
+          const proofImageUrl = await this.minioService.getFileUrl(
+            payment.proofImageUrl,
+          );
+          return { ...payment, proofImageUrl };
+        } catch {
+          return payment;
+        }
+      }),
+    );
+
+    return {
+      data: dataWithResolvedProof,
+      meta: { total, page, limit, lastPage: Math.ceil(total / limit) },
+    };
   }
 
   private async logCheckoutToSheets(data: {

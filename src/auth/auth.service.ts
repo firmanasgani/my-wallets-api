@@ -183,6 +183,11 @@ export class AuthService {
       user.passwordHash &&
       (await bcrypt.compare(pass, user.passwordHash))
     ) {
+      if (!user.isActive) {
+        throw new ForbiddenException(
+          'Account has been deactivated. Contact support.',
+        );
+      }
       const { passwordHash, ...result } = user;
       return result as Omit<User, 'passwordHash'>;
     }
