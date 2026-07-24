@@ -41,6 +41,7 @@ export class EmailBlastsService {
         recipients: {
           select: {
             id: true,
+            userId: true,
             email: true,
             status: true,
             sentAt: true,
