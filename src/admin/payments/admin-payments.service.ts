@@ -11,6 +11,7 @@ export class AdminPaymentsService {
     limit?: number;
     status?: PaymentStatus;
     method?: PaymentMethod;
+    planId?: string;
   }) {
     return this.subscriptionsService.listPayments(params);
   }

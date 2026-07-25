@@ -30,11 +30,13 @@ export class AdminSubscriptionsController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('status') status?: SubscriptionStatus,
+    @Query('planId') planId?: string,
   ) {
     return this.adminSubscriptionsService.findAll({
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
       status,
+      planId,
     });
   }
 

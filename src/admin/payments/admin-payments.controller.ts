@@ -29,12 +29,14 @@ export class AdminPaymentsController {
     @Query('limit') limit?: string,
     @Query('status') status?: PaymentStatus,
     @Query('method') method?: PaymentMethod,
+    @Query('planId') planId?: string,
   ) {
     return this.adminPaymentsService.listPayments({
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
       status,
       method,
+      planId,
     });
   }
 

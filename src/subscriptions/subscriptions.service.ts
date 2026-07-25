@@ -775,14 +775,16 @@ export class SubscriptionsService {
     limit?: number;
     status?: PaymentStatus;
     method?: PaymentMethod;
+    planId?: string;
   }) {
     const page = params.page && params.page > 0 ? params.page : 1;
     const limit = params.limit && params.limit > 0 ? params.limit : 20;
     const skip = (page - 1) * limit;
 
-    const where: { status?: PaymentStatus; method?: PaymentMethod } = {};
+    const where: { status?: PaymentStatus; method?: PaymentMethod; planId?: string } = {};
     if (params.status) where.status = params.status;
     if (params.method) where.method = params.method;
+    if (params.planId) where.planId = params.planId;
 
     const [data, total] = await Promise.all([
       this.prisma.paymentTransaction.findMany({

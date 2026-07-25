@@ -10,13 +10,19 @@ export class AdminSubscriptionsService {
     private logsService: LogsService,
   ) {}
 
-  async findAll(params: { page?: number; limit?: number; status?: SubscriptionStatus }) {
+  async findAll(params: {
+    page?: number;
+    limit?: number;
+    status?: SubscriptionStatus;
+    planId?: string;
+  }) {
     const page = params.page && params.page > 0 ? params.page : 1;
     const limit = params.limit && params.limit > 0 ? params.limit : 20;
     const skip = (page - 1) * limit;
 
     const where: Prisma.UserSubscriptionWhereInput = {};
     if (params.status) where.status = params.status;
+    if (params.planId) where.subscriptionPlanId = params.planId;
 
     const [data, total] = await Promise.all([
       this.prisma.userSubscription.findMany({
