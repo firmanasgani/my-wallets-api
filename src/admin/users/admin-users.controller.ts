@@ -48,6 +48,19 @@ export class AdminUsersController {
     return this.adminUsersService.findOne(id);
   }
 
+  @Get(':id/logs')
+  getLogs(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.adminUsersService.getUserLogs(
+      id,
+      page ? parseInt(page, 10) : undefined,
+      limit ? parseInt(limit, 10) : undefined,
+    );
+  }
+
   @Patch(':id/deactivate')
   @RequireAdminRole(AdminRole.SALES)
   deactivate(

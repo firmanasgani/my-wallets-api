@@ -4,9 +4,10 @@ import { AdminUsersService } from './admin-users.service';
 import { PrismaModule } from 'src/prisma/prisma.module';
 import { LogsModule } from 'src/logs/logs.module';
 import { AdminAuthModule } from '../auth/admin-auth.module';
+import { MinioModule } from 'src/common/minio/minio.module';
 
 @Module({
-  imports: [PrismaModule, LogsModule, AdminAuthModule],
+  imports: [PrismaModule, LogsModule, AdminAuthModule, MinioModule],
   controllers: [AdminUsersController],
   providers: [AdminUsersService],
 })

@@ -7,12 +7,14 @@ import * as bcrypt from 'bcrypt';
 import { LogActionType, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { LogsService } from 'src/logs/logs.service';
+import { MinioService } from 'src/common/minio/minio.service';
 
 @Injectable()
 export class AdminUsersService {
   constructor(
     private prisma: PrismaService,
     private logsService: LogsService,
+    private minioService: MinioService,
   ) {}
 
   async findAll(params: {
@@ -85,6 +87,7 @@ export class AdminUsersService {
         username: true,
         email: true,
         fullName: true,
+        profilePicture: true,
         isActive: true,
         deactivatedAt: true,
         deactivatedReason: true,
@@ -100,7 +103,23 @@ export class AdminUsersService {
       },
     });
     if (!user) throw new NotFoundException('User not found');
-    return user;
+
+    let profilePictureUrl: string | null = null;
+    if (user.profilePicture) {
+      try {
+        profilePictureUrl = await this.minioService.getFileUrl(
+          user.profilePicture,
+        );
+      } catch {
+        profilePictureUrl = null;
+      }
+    }
+
+    return { ...user, profilePictureUrl };
+  }
+
+  getUserLogs(id: string, page?: number, limit?: number) {
+    return this.logsService.findUserlogs(id, page, limit);
   }
 
   async deactivate(id: string, actingAdminId: string, reason?: string) {
