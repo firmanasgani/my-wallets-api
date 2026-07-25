@@ -31,6 +31,7 @@ export class AdminUsersController {
     @Query('search') search?: string,
     @Query('isActive') isActive?: string,
     @Query('segment') segment?: 'active_subscribers' | 'free',
+    @Query('planId') planId?: string,
   ) {
     return this.adminUsersService.findAll({
       page: page ? parseInt(page, 10) : undefined,
@@ -38,6 +39,7 @@ export class AdminUsersController {
       search,
       isActive: isActive === undefined ? undefined : isActive === 'true',
       segment,
+      planId,
     });
   }
 

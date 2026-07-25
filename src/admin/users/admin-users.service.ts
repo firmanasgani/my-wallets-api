@@ -21,6 +21,7 @@ export class AdminUsersService {
     search?: string;
     isActive?: boolean;
     segment?: 'active_subscribers' | 'free';
+    planId?: string;
   }) {
     const page = params.page && params.page > 0 ? params.page : 1;
     const limit = params.limit && params.limit > 0 ? params.limit : 20;
@@ -35,7 +36,11 @@ export class AdminUsersService {
         { fullName: { contains: params.search, mode: 'insensitive' } },
       ];
     }
-    if (params.segment === 'active_subscribers') {
+    if (params.planId) {
+      where.subscriptions = {
+        some: { subscriptionPlanId: params.planId, status: 'ACTIVE' },
+      };
+    } else if (params.segment === 'active_subscribers') {
       where.subscriptions = { some: { status: 'ACTIVE' } };
     } else if (params.segment === 'free') {
       where.subscriptions = { none: { status: 'ACTIVE' } };
