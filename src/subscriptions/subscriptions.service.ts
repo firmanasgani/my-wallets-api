@@ -14,6 +14,7 @@ import {
   LogActionType,
   PaymentMethod,
   PaymentStatus,
+  Prisma,
   SubscriptionPlan,
   SubscriptionStatus,
 } from '@prisma/client';
@@ -588,9 +589,26 @@ export class SubscriptionsService {
   }
 
   /**
+   * Plan durations are stored in months, but renewals/upgrades extend by a
+   * fixed number of days rather than calendar months: 1 month -> 30 days,
+   * 6 months -> 180 days, 12 months (1 year) -> 365 days.
+   */
+  private getDurationDays(durationMonths: number | null): number | null {
+    if (durationMonths == null) return null;
+    const map: Record<number, number> = { 1: 30, 6: 180, 12: 365 };
+    return map[durationMonths] ?? durationMonths * 30;
+  }
+
+  /**
    * Shared by the Midtrans webhook, the recurring-notification handler, and
    * the manual-payment admin-approval flow — all three activate a
    * subscription the same way, so the transaction lives in one place.
+   *
+   * If the user already has time left on an active subscription, the new
+   * period is added on top of the existing endDate instead of resetting to
+   * now — this is what makes "renew" (same plan) and "upgrade" (different
+   * plan) extend rather than discard remaining time. No proration is
+   * applied either way.
    */
   private async activateSubscriptionForPayment(params: {
     userId: string;
@@ -600,12 +618,19 @@ export class SubscriptionsService {
   }) {
     const { userId, plan, paymentId, description } = params;
     const now = new Date();
-    const endDate = plan.durationMonths
-      ? new Date(
-          now.getFullYear(),
-          now.getMonth() + plan.durationMonths,
-          now.getDate(),
-        )
+
+    const existingActive = await this.prisma.userSubscription.findFirst({
+      where: { userId, status: SubscriptionStatus.ACTIVE },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const baseDate =
+      existingActive?.endDate && existingActive.endDate > now
+        ? existingActive.endDate
+        : now;
+    const durationDays = this.getDurationDays(plan.durationMonths);
+    const endDate = durationDays
+      ? new Date(baseDate.getTime() + durationDays * 24 * 60 * 60 * 1000)
       : null;
 
     await this.prisma.$transaction([
@@ -620,6 +645,8 @@ export class SubscriptionsService {
           status: SubscriptionStatus.ACTIVE,
           startDate: now,
           endDate,
+          // scheduledPlanId intentionally left unset: a fresh payment
+          // clears any previously scheduled downgrade/cancel.
         },
       }),
       this.prisma.log.create({
@@ -633,6 +660,78 @@ export class SubscriptionsService {
         },
       }),
     ]);
+  }
+
+  /**
+   * Self-service downgrade (including cancel, which is a downgrade to
+   * FREE). No payment is involved: the user keeps access to their current
+   * plan until it naturally expires, at which point `expireSubscriptions()`
+   * applies the scheduled plan.
+   */
+  async scheduleDowngrade(userId: string, planCode: string) {
+    const targetPlan = await this.getPlanByCode(planCode);
+    const active = await this.prisma.userSubscription.findFirst({
+      where: { userId, status: SubscriptionStatus.ACTIVE },
+      include: { plan: true },
+    });
+    if (!active) {
+      throw new BadRequestException('You are already on the Free plan.');
+    }
+    if (Number(targetPlan.price) >= Number(active.plan.price)) {
+      throw new BadRequestException(
+        'You can only downgrade to a lower-tier plan.',
+      );
+    }
+
+    const updated = await this.prisma.userSubscription.update({
+      where: { id: active.id },
+      data: { scheduledPlanId: targetPlan.id },
+      include: { plan: true, scheduledPlan: true },
+    });
+
+    await this.logsService.create({
+      userId,
+      actionType: LogActionType.SUBSCRIPTION_DOWNGRADE_SCHEDULED,
+      entityType: 'UserSubscription',
+      entityId: active.id,
+      description: `User scheduled downgrade from ${active.plan.name} to ${targetPlan.name}, effective ${active.endDate?.toISOString() ?? 'N/A'}`,
+      details: { fromPlanCode: active.plan.code, toPlanCode: targetPlan.code },
+    });
+
+    return {
+      currentPlan: updated.plan.code,
+      scheduledPlan: updated.scheduledPlan?.code ?? null,
+      effectiveDate: updated.endDate,
+    };
+  }
+
+  async cancelScheduledDowngrade(userId: string) {
+    const active = await this.prisma.userSubscription.findFirst({
+      where: {
+        userId,
+        status: SubscriptionStatus.ACTIVE,
+        scheduledPlanId: { not: null },
+      },
+    });
+    if (!active) {
+      throw new BadRequestException('No scheduled plan change to cancel.');
+    }
+
+    await this.prisma.userSubscription.update({
+      where: { id: active.id },
+      data: { scheduledPlanId: null },
+    });
+
+    await this.logsService.create({
+      userId,
+      actionType: LogActionType.SUBSCRIPTION_DOWNGRADE_CANCELLED,
+      entityType: 'UserSubscription',
+      entityId: active.id,
+      description: 'User cancelled their scheduled plan downgrade.',
+      details: {},
+    });
+
+    return { message: 'Scheduled downgrade cancelled.' };
   }
 
   async submitManualPayment(
@@ -896,7 +995,7 @@ export class SubscriptionsService {
           lt: startOfToday,
         },
       },
-      select: { id: true, userId: true },
+      include: { scheduledPlan: true },
     });
 
     if (expired.length === 0) {
@@ -904,24 +1003,49 @@ export class SubscriptionsService {
       return;
     }
 
-    const ids = expired.map((s) => s.id);
+    for (const sub of expired) {
+      const ops: Prisma.PrismaPromise<any>[] = [
+        this.prisma.userSubscription.update({
+          where: { id: sub.id },
+          data: { status: SubscriptionStatus.EXPIRED },
+        }),
+      ];
 
-    await this.prisma.userSubscription.updateMany({
-      where: { id: { in: ids } },
-      data: { status: SubscriptionStatus.EXPIRED },
-    });
+      // A scheduled downgrade to a paid plan starts a fresh cycle now; a
+      // scheduled downgrade to FREE (or no schedule at all) needs no new
+      // row — "no active subscription" already means Free everywhere else.
+      if (sub.scheduledPlan && sub.scheduledPlan.code !== 'FREE') {
+        const durationDays = this.getDurationDays(
+          sub.scheduledPlan.durationMonths,
+        );
+        ops.push(
+          this.prisma.userSubscription.create({
+            data: {
+              userId: sub.userId,
+              subscriptionPlanId: sub.scheduledPlan.id,
+              status: SubscriptionStatus.ACTIVE,
+              startDate: now,
+              endDate: durationDays
+                ? new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000)
+                : null,
+            },
+          }),
+        );
+      }
 
-    await this.prisma.log.createMany({
-      data: expired.map((s) => ({
-        userId: s.userId,
+      await this.prisma.$transaction(ops);
+
+      await this.logsService.create({
+        userId: sub.userId,
         actionType: LogActionType.SUBSCRIPTION_WEBHOOK,
         entityType: 'UserSubscription',
-        entityId: s.id,
+        entityId: sub.id,
         description: 'Subscription expired automatically via scheduled job.',
-        details: {},
-      })),
-    });
+        details: { scheduledPlanCode: sub.scheduledPlan?.code ?? null },
+      });
+    }
 
+    const ids = expired.map((s) => s.id);
     this.logger.log(`[ExpireSubscriptions] Expired ${ids.length} subscription(s): ${ids.join(', ')}`);
   }
 }

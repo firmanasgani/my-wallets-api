@@ -61,8 +61,9 @@ model SubscriptionPlan {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  userSubscriptions   UserSubscription[]
-  paymentTransactions PaymentTransaction[]
+  userSubscriptions          UserSubscription[] @relation("CurrentPlan")
+  scheduledForSubscriptions  UserSubscription[] @relation("ScheduledPlan")
+  paymentTransactions        PaymentTransaction[]
 }
 
 model UserSubscription {
@@ -70,10 +71,12 @@ model UserSubscription {
   userId             String
   user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   subscriptionPlanId String
-  plan               SubscriptionPlan   @relation(fields: [subscriptionPlanId], references: [id])
+  plan               SubscriptionPlan   @relation("CurrentPlan", fields: [subscriptionPlanId], references: [id])
   startDate          DateTime           @default(now())
   endDate            DateTime?
   status             SubscriptionStatus @default(ACTIVE)
+  scheduledPlanId    String?
+  scheduledPlan      SubscriptionPlan?  @relation("ScheduledPlan", fields: [scheduledPlanId], references: [id])
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -216,6 +219,8 @@ enum LogActionType {
   SUBSCRIPTION_WEBHOOK
   PAYMENT_SUCCESS
   PAYMENT_FAILED
+  SUBSCRIPTION_DOWNGRADE_SCHEDULED
+  SUBSCRIPTION_DOWNGRADE_CANCELLED
 
   // Business — existing
   BUSINESS_COMPANY_CREATE

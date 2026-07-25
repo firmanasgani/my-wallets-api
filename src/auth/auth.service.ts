@@ -613,7 +613,7 @@ export class AuthService {
       include: {
         subscriptions: {
           where: { status: SubscriptionStatus.ACTIVE },
-          include: { plan: true },
+          include: { plan: true, scheduledPlan: true },
           orderBy: { createdAt: 'desc' },
           take: 1,
         },
@@ -680,6 +680,8 @@ export class AuthService {
             endDate: activeSubscription.endDate,
             expiresAt: activeSubscription.endDate,
             daysRemaining,
+            scheduledPlanCode: activeSubscription.scheduledPlan?.code ?? null,
+            scheduledPlanName: activeSubscription.scheduledPlan?.name ?? null,
           }
         : null,
     };

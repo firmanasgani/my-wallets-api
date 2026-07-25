@@ -50,6 +50,21 @@ export class SubscriptionsController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Post('downgrade')
+  async downgrade(@Body() body: { planCode: string }, @Request() req) {
+    return this.subscriptionsService.scheduleDowngrade(
+      req.user.id,
+      body.planCode,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('downgrade/cancel')
+  async cancelDowngrade(@Request() req) {
+    return this.subscriptionsService.cancelScheduledDowngrade(req.user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post('manual-payment')
   @UseInterceptors(FileInterceptor('file'))
   async submitManualPayment(
