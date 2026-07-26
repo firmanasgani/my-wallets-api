@@ -24,7 +24,9 @@ import { UpdateNotificationBroadcastDto } from './dto/update-notification-broadc
 @UseGuards(AdminJwtAuthGuard, AdminRoleGuard)
 @RequireAdminRole(AdminRole.SALES)
 export class AdminNotificationBroadcastsController {
-  constructor(private readonly notificationBroadcastsService: NotificationBroadcastsService) {}
+  constructor(
+    private readonly notificationBroadcastsService: NotificationBroadcastsService,
+  ) {}
 
   @Get()
   findAll() {

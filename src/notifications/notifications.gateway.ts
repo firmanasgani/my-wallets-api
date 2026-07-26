@@ -39,7 +39,9 @@ export class NotificationsGateway implements OnGatewayInit {
     server.use((socket: Socket, next) => {
       this.authenticateSocket(socket)
         .then(() => next())
-        .catch((err) => next(err instanceof Error ? err : new Error(String(err))));
+        .catch((err) =>
+          next(err instanceof Error ? err : new Error(String(err))),
+        );
     });
   }
 
@@ -47,17 +49,23 @@ export class NotificationsGateway implements OnGatewayInit {
     const token = this.extractToken(client);
     const actor = await this.authenticate(token);
     client.data.actor = actor;
-    client.join(actor.type === 'user' ? `user:${actor.id}` : `admin:${actor.id}`);
+    client.join(
+      actor.type === 'user' ? `user:${actor.id}` : `admin:${actor.id}`,
+    );
   }
 
   @OnEvent('user-notification.created')
   handleUserNotificationCreated(notification: UserNotification) {
-    this.server.to(`user:${notification.userId}`).emit('notification:new', notification);
+    this.server
+      .to(`user:${notification.userId}`)
+      .emit('notification:new', notification);
   }
 
   @OnEvent('admin-notification.created')
   handleAdminNotificationCreated(notification: AdminNotification) {
-    this.server.to(`admin:${notification.adminId}`).emit('notification:new', notification);
+    this.server
+      .to(`admin:${notification.adminId}`)
+      .emit('notification:new', notification);
   }
 
   private extractToken(client: Socket): string {

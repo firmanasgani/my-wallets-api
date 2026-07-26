@@ -1,4 +1,11 @@
-import { ArrayMinSize, IsArray, IsDateString, IsOptional, IsString, IsUUID } from 'class-validator';
+import {
+  ArrayMinSize,
+  IsArray,
+  IsDateString,
+  IsOptional,
+  IsString,
+  IsUUID,
+} from 'class-validator';
 
 export class UpdateNotificationBroadcastDto {
   @IsOptional()

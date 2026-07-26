@@ -11,7 +11,12 @@ export class DeviceTokensService {
     return this.prisma.deviceToken.upsert({
       where: { token: dto.token },
       create: { userId, platform: dto.platform, token: dto.token },
-      update: { userId, platform: dto.platform, isActive: true, lastSeenAt: new Date() },
+      update: {
+        userId,
+        platform: dto.platform,
+        isActive: true,
+        lastSeenAt: new Date(),
+      },
     });
   }
 

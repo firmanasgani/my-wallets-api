@@ -41,7 +41,9 @@ export class NotificationsCron {
       await this.notificationBroadcastsService.processDueScheduledBroadcasts();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      this.logger.error(`Failed while processing due notification broadcasts: ${message}`);
+      this.logger.error(
+        `Failed while processing due notification broadcasts: ${message}`,
+      );
     }
   }
 
@@ -49,7 +51,10 @@ export class NotificationsCron {
     if (!this.fcmService.isEnabled) return;
 
     const pending = await this.prisma.userNotificationDelivery.findMany({
-      where: { status: NotificationDeliveryStatus.PENDING, attempts: { lt: MAX_ATTEMPTS } },
+      where: {
+        status: NotificationDeliveryStatus.PENDING,
+        attempts: { lt: MAX_ATTEMPTS },
+      },
       orderBy: { createdAt: 'asc' },
       take: FCM_BATCH_SIZE,
       include: {
@@ -84,7 +89,9 @@ export class NotificationsCron {
         continue;
       }
 
-      const isInvalidToken = this.fcmService.isTokenInvalidError(result.errorCode);
+      const isInvalidToken = this.fcmService.isTokenInvalidError(
+        result.errorCode,
+      );
       const nextAttempts = delivery.attempts + 1;
 
       await this.prisma.userNotificationDelivery.update({

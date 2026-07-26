@@ -14,8 +14,18 @@ import { NotificationsGateway } from './notifications.gateway';
 import { FcmService } from './delivery/fcm.service';
 
 @Module({
-  imports: [ConfigModule, PrismaModule, UsersModule, AdminsModule, EventEmitterModule.forRoot()],
-  controllers: [UserNotificationsController, DeviceTokensController, AdminNotificationsController],
+  imports: [
+    ConfigModule,
+    PrismaModule,
+    UsersModule,
+    AdminsModule,
+    EventEmitterModule.forRoot(),
+  ],
+  controllers: [
+    UserNotificationsController,
+    DeviceTokensController,
+    AdminNotificationsController,
+  ],
   providers: [
     UserNotificationsService,
     DeviceTokensService,

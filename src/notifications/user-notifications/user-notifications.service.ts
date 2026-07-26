@@ -56,7 +56,12 @@ export class UserNotificationsService {
 
   async list(
     userId: string,
-    params: { page?: number; limit?: number; isRead?: boolean; type?: NotificationType },
+    params: {
+      page?: number;
+      limit?: number;
+      isRead?: boolean;
+      type?: NotificationType;
+    },
   ) {
     const page = params.page && params.page > 0 ? params.page : 1;
     const limit = params.limit && params.limit > 0 ? params.limit : 20;
@@ -76,7 +81,20 @@ export class UserNotificationsService {
       this.prisma.userNotification.count({ where }),
     ]);
 
-    return { data, meta: { total, page, limit, lastPage: Math.ceil(total / limit) } };
+    return {
+      data,
+      meta: { total, page, limit, lastPage: Math.ceil(total / limit) },
+    };
+  }
+
+  async findOne(userId: string, id: string) {
+    const notification = await this.prisma.userNotification.findFirst({
+      where: { id, userId },
+    });
+    if (!notification) {
+      throw new NotFoundException('Notification not found');
+    }
+    return notification;
   }
 
   async unreadCount(userId: string) {

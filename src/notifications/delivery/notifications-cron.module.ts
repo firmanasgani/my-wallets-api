@@ -12,7 +12,11 @@ import { NotificationsCron } from './notifications.cron';
  * those two modules — keeps the dependency graph a DAG instead of a cycle.
  */
 @Module({
-  imports: [PrismaModule, NotificationsModule, AdminNotificationBroadcastsModule],
+  imports: [
+    PrismaModule,
+    NotificationsModule,
+    AdminNotificationBroadcastsModule,
+  ],
   providers: [NotificationsCron],
 })
 export class NotificationsCronModule {}

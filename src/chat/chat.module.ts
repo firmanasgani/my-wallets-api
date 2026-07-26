@@ -11,7 +11,14 @@ import { AdminAuthModule } from 'src/admin/auth/admin-auth.module';
 import { NotificationsModule } from 'src/notifications/notifications.module';
 
 @Module({
-  imports: [ConfigModule, PrismaModule, UsersModule, AdminsModule, AdminAuthModule, NotificationsModule],
+  imports: [
+    ConfigModule,
+    PrismaModule,
+    UsersModule,
+    AdminsModule,
+    AdminAuthModule,
+    NotificationsModule,
+  ],
   controllers: [ChatController, AdminChatController],
   providers: [ChatService, ChatGateway],
 })

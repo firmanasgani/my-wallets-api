@@ -1,5 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { ConversationStatus, MessageSenderType, Message, Admin, NotificationType } from '@prisma/client';
+import {
+  ConversationStatus,
+  MessageSenderType,
+  Message,
+  Admin,
+  NotificationType,
+} from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserNotificationsService } from 'src/notifications/user-notifications/user-notifications.service';
 import { AdminNotificationsService } from 'src/notifications/admin-notifications/admin-notifications.service';
@@ -20,7 +26,9 @@ type MessageWithSenderAdmin = Message & {
  * The admin's identity is admin-only information (see ChatGateway/ChatController
  * usage) — customers must never receive it, over REST or the live socket.
  */
-export function redactSenderAdmin(message: MessageWithSenderAdmin): MessageWithSenderAdmin {
+export function redactSenderAdmin(
+  message: MessageWithSenderAdmin,
+): MessageWithSenderAdmin {
   return { ...message, senderAdmin: null };
 }
 
@@ -46,7 +54,9 @@ export class ChatService {
       where: params.status ? { status: params.status } : undefined,
       orderBy: { lastMessageAt: 'desc' },
       include: {
-        user: { select: { id: true, username: true, email: true, fullName: true } },
+        user: {
+          select: { id: true, username: true, email: true, fullName: true },
+        },
         assignedAdmin: { select: { id: true, username: true } },
         _count: {
           select: {
@@ -113,7 +123,10 @@ export class ChatService {
 
     await this.prisma.conversation.update({
       where: { id: conversation.id },
-      data: { lastMessageAt: message.createdAt, status: ConversationStatus.OPEN },
+      data: {
+        lastMessageAt: message.createdAt,
+        status: ConversationStatus.OPEN,
+      },
     });
 
     await this.adminNotificationsService.fanOutToAllActiveAdmins({

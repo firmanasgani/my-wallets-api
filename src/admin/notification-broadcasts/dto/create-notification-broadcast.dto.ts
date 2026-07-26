@@ -24,7 +24,9 @@ export class CreateNotificationBroadcastDto {
   targetType: NotificationBroadcastTargetType;
 
   /** Required when targetType = SPECIFIC_USERS; ignored for ALL_USERS, which resolves recipients at send time. */
-  @ValidateIf((dto) => dto.targetType === NotificationBroadcastTargetType.SPECIFIC_USERS)
+  @ValidateIf(
+    (dto) => dto.targetType === NotificationBroadcastTargetType.SPECIFIC_USERS,
+  )
   @IsArray()
   @ArrayMinSize(1, { message: 'Select at least one recipient.' })
   @IsUUID('4', { each: true })

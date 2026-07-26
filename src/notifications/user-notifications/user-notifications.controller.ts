@@ -1,11 +1,20 @@
-import { Controller, Get, Param, ParseUUIDPipe, Patch, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Query,
+} from '@nestjs/common';
 import { NotificationType, User as UserModel } from '@prisma/client';
 import { GetUser } from 'src/common/decorators/get-user.decorator';
 import { UserNotificationsService } from './user-notifications.service';
 
 @Controller('notifications')
 export class UserNotificationsController {
-  constructor(private readonly userNotificationsService: UserNotificationsService) {}
+  constructor(
+    private readonly userNotificationsService: UserNotificationsService,
+  ) {}
 
   @Get()
   findAll(
@@ -26,6 +35,14 @@ export class UserNotificationsController {
   @Get('unread-count')
   unreadCount(@GetUser() user: Omit<UserModel, 'passwordHash'>) {
     return this.userNotificationsService.unreadCount(user.id);
+  }
+
+  @Get(':id')
+  findOne(
+    @GetUser() user: Omit<UserModel, 'passwordHash'>,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.userNotificationsService.findOne(user.id, id);
   }
 
   @Patch('read-all')

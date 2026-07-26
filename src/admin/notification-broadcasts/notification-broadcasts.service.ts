@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   LogActionType,
   NotificationBroadcastRecipientStatus,
@@ -47,11 +52,21 @@ export class NotificationBroadcastsService {
       include: {
         createdBy: { select: { id: true, username: true } },
         recipients: {
-          select: { id: true, userId: true, status: true, sentAt: true, error: true },
+          select: {
+            id: true,
+            userId: true,
+            status: true,
+            sentAt: true,
+            error: true,
+            user: {
+              select: { id: true, username: true, email: true, fullName: true },
+            },
+          },
         },
       },
     });
-    if (!broadcast) throw new NotFoundException('Notification broadcast not found');
+    if (!broadcast)
+      throw new NotFoundException('Notification broadcast not found');
     return broadcast;
   }
 
@@ -87,7 +102,9 @@ export class NotificationBroadcastsService {
         totalRecipients,
         createdByAdminId: adminId,
         recipients:
-          recipientsCreate.length > 0 ? { create: recipientsCreate } : undefined,
+          recipientsCreate.length > 0
+            ? { create: recipientsCreate }
+            : undefined,
       },
       include: { recipients: true },
     });
@@ -105,22 +122,36 @@ export class NotificationBroadcastsService {
           ? 'all active users'
           : `${totalRecipients} recipient(s)`
       })`,
-      details: { targetType: dto.targetType, scheduledAt: dto.scheduledAt ?? null },
+      details: {
+        targetType: dto.targetType,
+        scheduledAt: dto.scheduledAt ?? null,
+      },
     });
 
     return broadcast;
   }
 
-  async update(id: string, dto: UpdateNotificationBroadcastDto, adminId: string) {
-    const existing = await this.prisma.notificationBroadcast.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Notification broadcast not found');
+  async update(
+    id: string,
+    dto: UpdateNotificationBroadcastDto,
+    adminId: string,
+  ) {
+    const existing = await this.prisma.notificationBroadcast.findUnique({
+      where: { id },
+    });
+    if (!existing)
+      throw new NotFoundException('Notification broadcast not found');
     if (!EDITABLE_STATUSES.includes(existing.status)) {
-      throw new BadRequestException('Only draft or scheduled broadcasts can be edited.');
+      throw new BadRequestException(
+        'Only draft or scheduled broadcasts can be edited.',
+      );
     }
 
     let totalRecipients = existing.totalRecipients;
     if (dto.userIds) {
-      if (existing.targetType !== NotificationBroadcastTargetType.SPECIFIC_USERS) {
+      if (
+        existing.targetType !== NotificationBroadcastTargetType.SPECIFIC_USERS
+      ) {
         throw new BadRequestException(
           'Recipient list can only be edited for SPECIFIC_USERS broadcasts.',
         );
@@ -136,7 +167,10 @@ export class NotificationBroadcastsService {
         where: { notificationBroadcastId: id },
       });
       await this.prisma.notificationBroadcastRecipient.createMany({
-        data: users.map((user) => ({ notificationBroadcastId: id, userId: user.id })),
+        data: users.map((user) => ({
+          notificationBroadcastId: id,
+          userId: user.id,
+        })),
       });
       totalRecipients = users.length;
     }
@@ -153,7 +187,13 @@ export class NotificationBroadcastsService {
 
     const updated = await this.prisma.notificationBroadcast.update({
       where: { id },
-      data: { title: dto.title, body: dto.body, status, scheduledAt, totalRecipients },
+      data: {
+        title: dto.title,
+        body: dto.body,
+        status,
+        scheduledAt,
+        totalRecipients,
+      },
       include: { recipients: true },
     });
 
@@ -169,10 +209,15 @@ export class NotificationBroadcastsService {
   }
 
   async unschedule(id: string, adminId: string) {
-    const existing = await this.prisma.notificationBroadcast.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Notification broadcast not found');
+    const existing = await this.prisma.notificationBroadcast.findUnique({
+      where: { id },
+    });
+    if (!existing)
+      throw new NotFoundException('Notification broadcast not found');
     if (existing.status !== NotificationBroadcastStatus.SCHEDULED) {
-      throw new BadRequestException('Only scheduled broadcasts can be unscheduled.');
+      throw new BadRequestException(
+        'Only scheduled broadcasts can be unscheduled.',
+      );
     }
 
     const updated = await this.prisma.notificationBroadcast.update({
@@ -192,10 +237,15 @@ export class NotificationBroadcastsService {
   }
 
   async remove(id: string, adminId: string) {
-    const existing = await this.prisma.notificationBroadcast.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Notification broadcast not found');
+    const existing = await this.prisma.notificationBroadcast.findUnique({
+      where: { id },
+    });
+    if (!existing)
+      throw new NotFoundException('Notification broadcast not found');
     if (existing.status === NotificationBroadcastStatus.SENDING) {
-      throw new BadRequestException('Cannot delete a broadcast while it is sending.');
+      throw new BadRequestException(
+        'Cannot delete a broadcast while it is sending.',
+      );
     }
 
     await this.prisma.notificationBroadcast.delete({ where: { id } });
@@ -212,10 +262,15 @@ export class NotificationBroadcastsService {
   }
 
   async sendNow(id: string) {
-    const existing = await this.prisma.notificationBroadcast.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Notification broadcast not found');
+    const existing = await this.prisma.notificationBroadcast.findUnique({
+      where: { id },
+    });
+    if (!existing)
+      throw new NotFoundException('Notification broadcast not found');
     if (!EDITABLE_STATUSES.includes(existing.status)) {
-      throw new BadRequestException('Only draft or scheduled broadcasts can be sent.');
+      throw new BadRequestException(
+        'Only draft or scheduled broadcasts can be sent.',
+      );
     }
 
     // Fire-and-forget: sendBroadcast() claims the row atomically, so the cron
@@ -252,20 +307,28 @@ export class NotificationBroadcastsService {
     });
     if (claimed.count === 0) return;
 
-    let broadcast = await this.prisma.notificationBroadcast.findUnique({ where: { id } });
+    let broadcast = await this.prisma.notificationBroadcast.findUnique({
+      where: { id },
+    });
     if (!broadcast) return;
 
     if (broadcast.targetType === NotificationBroadcastTargetType.ALL_USERS) {
       // Resolved here, not at create() time, so a scheduled broadcast reflects
       // who's active when it actually sends — see NOTIFICATION_SYSTEM_PLAN.md §6.
       await this.resolveAllUsersRecipients(id);
-      broadcast = await this.prisma.notificationBroadcast.findUnique({ where: { id } });
+      broadcast = await this.prisma.notificationBroadcast.findUnique({
+        where: { id },
+      });
       if (!broadcast) return;
     }
 
-    const pendingRecipients = await this.prisma.notificationBroadcastRecipient.findMany({
-      where: { notificationBroadcastId: id, status: NotificationBroadcastRecipientStatus.PENDING },
-    });
+    const pendingRecipients =
+      await this.prisma.notificationBroadcastRecipient.findMany({
+        where: {
+          notificationBroadcastId: id,
+          status: NotificationBroadcastRecipientStatus.PENDING,
+        },
+      });
 
     let sentCount = 0;
     let failedCount = 0;
@@ -277,7 +340,9 @@ export class NotificationBroadcastsService {
           type: NotificationType.PROMOTION,
           title: broadcast.title,
           body: broadcast.body,
-          data: (broadcast.data ?? undefined) as Prisma.InputJsonValue | undefined,
+          data: (broadcast.data ?? undefined) as
+            | Prisma.InputJsonValue
+            | undefined,
         });
         sentCount++;
         await this.prisma.notificationBroadcastRecipient.update({
@@ -293,7 +358,10 @@ export class NotificationBroadcastsService {
         const message = err instanceof Error ? err.message : 'Unknown error';
         await this.prisma.notificationBroadcastRecipient.update({
           where: { id: recipient.id },
-          data: { status: NotificationBroadcastRecipientStatus.FAILED, error: message.slice(0, 500) },
+          data: {
+            status: NotificationBroadcastRecipientStatus.FAILED,
+            error: message.slice(0, 500),
+          },
         });
       }
     }
@@ -339,7 +407,10 @@ export class NotificationBroadcastsService {
 
     if (users.length > 0) {
       await this.prisma.notificationBroadcastRecipient.createMany({
-        data: users.map((user) => ({ notificationBroadcastId: broadcastId, userId: user.id })),
+        data: users.map((user) => ({
+          notificationBroadcastId: broadcastId,
+          userId: user.id,
+        })),
         skipDuplicates: true,
       });
     }

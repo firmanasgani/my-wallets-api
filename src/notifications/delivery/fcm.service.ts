@@ -37,14 +37,18 @@ export class FcmService implements OnModuleInit {
       return;
     }
 
-    const serviceAccountJson = this.configService.get<string>('FCM_SERVICE_ACCOUNT_JSON');
+    const serviceAccountJson = this.configService.get<string>(
+      'FCM_SERVICE_ACCOUNT_JSON',
+    );
     const projectId = this.configService.get<string>('FCM_PROJECT_ID');
     const clientEmail = this.configService.get<string>('FCM_CLIENT_EMAIL');
     const privateKey = this.configService.get<string>('FCM_PRIVATE_KEY');
 
     try {
       if (serviceAccountJson) {
-        this.app = initializeApp({ credential: cert(JSON.parse(serviceAccountJson)) });
+        this.app = initializeApp({
+          credential: cert(JSON.parse(serviceAccountJson)),
+        });
       } else if (projectId && clientEmail && privateKey) {
         this.app = initializeApp({
           credential: cert({
@@ -78,7 +82,12 @@ export class FcmService implements OnModuleInit {
    * batches into one HTTP call, but each recipient gets their own content.
    */
   async sendBatch(
-    messages: { token: string; title: string; body: string; data?: Record<string, string> }[],
+    messages: {
+      token: string;
+      title: string;
+      body: string;
+      data?: Record<string, string>;
+    }[],
   ): Promise<FcmSendResult[]> {
     if (!this.messaging) {
       return messages.map((message) => ({

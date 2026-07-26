@@ -9,7 +9,13 @@ import { MinioModule } from '../common/minio/minio.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [ConfigModule, LogsModule, PrismaModule, MinioModule, NotificationsModule],
+  imports: [
+    ConfigModule,
+    LogsModule,
+    PrismaModule,
+    MinioModule,
+    NotificationsModule,
+  ],
   controllers: [SubscriptionsController, MidtransNotificationController],
   providers: [SubscriptionsService],
   exports: [SubscriptionsService],

@@ -52,7 +52,12 @@ export class AdminNotificationsService {
 
   async list(
     adminId: string,
-    params: { page?: number; limit?: number; isRead?: boolean; type?: NotificationType },
+    params: {
+      page?: number;
+      limit?: number;
+      isRead?: boolean;
+      type?: NotificationType;
+    },
   ) {
     const page = params.page && params.page > 0 ? params.page : 1;
     const limit = params.limit && params.limit > 0 ? params.limit : 20;
@@ -72,7 +77,10 @@ export class AdminNotificationsService {
       this.prisma.adminNotification.count({ where }),
     ]);
 
-    return { data, meta: { total, page, limit, lastPage: Math.ceil(total / limit) } };
+    return {
+      data,
+      meta: { total, page, limit, lastPage: Math.ceil(total / limit) },
+    };
   }
 
   async unreadCount(adminId: string) {

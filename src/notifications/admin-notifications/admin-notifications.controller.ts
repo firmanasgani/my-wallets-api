@@ -1,4 +1,12 @@
-import { Controller, Get, Param, ParseUUIDPipe, Patch, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { Admin, NotificationType } from '@prisma/client';
 import { Public } from 'src/auth/decorators/public.decorator';
 import { AdminJwtAuthGuard } from 'src/admin/auth/guards/admin-jwt-auth.guard';
@@ -10,7 +18,9 @@ import { AdminNotificationsService } from './admin-notifications.service';
 @Controller('admin/notifications')
 @UseGuards(AdminJwtAuthGuard, AdminRoleGuard)
 export class AdminNotificationsController {
-  constructor(private readonly adminNotificationsService: AdminNotificationsService) {}
+  constructor(
+    private readonly adminNotificationsService: AdminNotificationsService,
+  ) {}
 
   @Get()
   findAll(
