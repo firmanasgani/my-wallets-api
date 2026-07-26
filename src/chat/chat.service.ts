@@ -1,6 +1,16 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { ConversationStatus, MessageSenderType, Message, Admin } from '@prisma/client';
+import { ConversationStatus, MessageSenderType, Message, Admin, NotificationType } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { UserNotificationsService } from 'src/notifications/user-notifications/user-notifications.service';
+import { AdminNotificationsService } from 'src/notifications/admin-notifications/admin-notifications.service';
+
+const NOTIFICATION_PREVIEW_LENGTH = 200;
+
+function previewContent(content: string): string {
+  return content.length > NOTIFICATION_PREVIEW_LENGTH
+    ? `${content.slice(0, NOTIFICATION_PREVIEW_LENGTH)}…`
+    : content;
+}
 
 type MessageWithSenderAdmin = Message & {
   senderAdmin: Pick<Admin, 'id' | 'username' | 'fullName'> | null;
@@ -16,7 +26,11 @@ export function redactSenderAdmin(message: MessageWithSenderAdmin): MessageWithS
 
 @Injectable()
 export class ChatService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private userNotificationsService: UserNotificationsService,
+    private adminNotificationsService: AdminNotificationsService,
+  ) {}
 
   async getOrCreateConversationForUser(userId: string) {
     const existing = await this.prisma.conversation.findUnique({
@@ -102,6 +116,13 @@ export class ChatService {
       data: { lastMessageAt: message.createdAt, status: ConversationStatus.OPEN },
     });
 
+    await this.adminNotificationsService.fanOutToAllActiveAdmins({
+      type: NotificationType.CHAT_MESSAGE,
+      title: 'New live chat message',
+      body: previewContent(content),
+      data: { conversationId: conversation.id },
+    });
+
     return message;
   }
 
@@ -135,6 +156,14 @@ export class ChatService {
         lastMessageAt: message.createdAt,
         assignedAdminId: conversation.assignedAdminId ?? adminId,
       },
+    });
+
+    await this.userNotificationsService.create({
+      userId: conversation.userId,
+      type: NotificationType.CHAT_MESSAGE,
+      title: 'New message from support',
+      body: previewContent(content),
+      data: { conversationId },
     });
 
     return message;

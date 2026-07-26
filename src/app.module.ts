@@ -23,6 +23,8 @@ import { BusinessModule } from './business/business.module';
 import { AdminModule } from './admin/admin.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
 import { ChatModule } from './chat/chat.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { NotificationsCronModule } from './notifications/delivery/notifications-cron.module';
 
 @Module({
   imports: [
@@ -51,6 +53,8 @@ import { ChatModule } from './chat/chat.module';
     AdminModule,
     AnnouncementsModule,
     ChatModule,
+    NotificationsModule,
+    NotificationsCronModule,
   ],
   controllers: [AppController],
   providers: [

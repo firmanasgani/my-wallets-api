@@ -36,6 +36,9 @@ model User {
   FinancialGoals        FinancialGoal[]
   conversation          Conversation?
   emailBlastRecipients  EmailBlastRecipient[]
+  notifications         UserNotification[]
+  deviceTokens          DeviceToken[]
+  notificationBroadcastRecipients NotificationBroadcastRecipient[]
 
   // Business relations
   ownedCompany            Company?                 @relation("CompanyOwner")
@@ -284,6 +287,14 @@ enum LogActionType {
   EMAIL_BLAST_CANCEL
   EMAIL_BLAST_SENT
   EMAIL_BLAST_FAILED
+
+  NOTIFICATION_BROADCAST_CREATE
+  NOTIFICATION_BROADCAST_UPDATE
+  NOTIFICATION_BROADCAST_DELETE
+  NOTIFICATION_BROADCAST_SCHEDULE
+  NOTIFICATION_BROADCAST_CANCEL
+  NOTIFICATION_BROADCAST_SENT
+  NOTIFICATION_BROADCAST_FAILED
 }
 
 model PaymentTransaction {
@@ -937,6 +948,8 @@ model Admin {
   assignedThreads  Conversation[]       @relation("ConversationAssignedAdmin")
   logs             Log[]
   emailBlasts      EmailBlast[]
+  notifications          AdminNotification[]
+  notificationBroadcasts NotificationBroadcast[]
 }
 
 model Announcement {
@@ -1043,4 +1056,157 @@ model Message {
   createdAt      DateTime          @default(now())
 
   @@index([conversationId, createdAt])
+}
+
+// --- Notifications ---
+// See NOTIFICATION_SYSTEM_PLAN.md. Entirely separate from email
+// (Mail/EmailBlast) — no shared tables, services, or cron.
+
+enum NotificationType {
+  PAYMENT_SUCCESS
+  PAYMENT_FAILED
+  PAYMENT_PENDING_REVIEW
+  SUBSCRIPTION_ACTIVATED
+  SUBSCRIPTION_EXPIRING
+  SUBSCRIPTION_EXPIRED
+  SUBSCRIPTION_CANCELLED
+  CHAT_MESSAGE
+  ACCOUNT_STATUS
+  PROMOTION
+  USER_REGISTERED
+  SYSTEM
+}
+
+model UserNotification {
+  id        String            @id @default(uuid())
+  userId    String
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String
+  data      Json?
+  isRead    Boolean           @default(false)
+  readAt    DateTime?
+  createdAt DateTime          @default(now())
+
+  deliveries UserNotificationDelivery[]
+
+  @@index([userId, isRead, createdAt])
+}
+
+enum DevicePlatform {
+  IOS
+  ANDROID
+}
+
+/// A registered FCM push target for a user's mobile app install. Users only —
+/// admins never get mobile push (see NOTIFICATION_SYSTEM_PLAN.md §2).
+model DeviceToken {
+  id         String         @id @default(uuid())
+  userId     String
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform   DevicePlatform
+  token      String         @unique
+  isActive   Boolean        @default(true)
+  lastSeenAt DateTime       @default(now())
+  createdAt  DateTime       @default(now())
+
+  deliveries UserNotificationDelivery[]
+
+  @@index([userId, isActive])
+}
+
+enum NotificationDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+/// FCM send queue, drained by the shared notifications cron. One row per
+/// (notification, device token). attempts caps at 5.
+model UserNotificationDelivery {
+  id                 String                     @id @default(uuid())
+  userNotificationId String
+  userNotification   UserNotification           @relation(fields: [userNotificationId], references: [id], onDelete: Cascade)
+  deviceTokenId      String
+  deviceToken        DeviceToken                @relation(fields: [deviceTokenId], references: [id], onDelete: Cascade)
+  status             NotificationDeliveryStatus @default(PENDING)
+  attempts           Int                        @default(0)
+  lastError          String?
+  sentAt             DateTime?
+  createdAt          DateTime                   @default(now())
+
+  @@index([status, createdAt])
+}
+
+/// Fan-out model: an event relevant to N admins produces N rows, so each
+/// admin has independent read state. Web-only, permanently.
+model AdminNotification {
+  id        String           @id @default(uuid())
+  adminId   String
+  admin     Admin            @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String
+  data      Json?
+  isRead    Boolean          @default(false)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([adminId, isRead, createdAt])
+}
+
+enum NotificationBroadcastStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  FAILED
+}
+
+enum NotificationBroadcastTargetType {
+  ALL_USERS
+  SPECIFIC_USERS
+}
+
+model NotificationBroadcast {
+  id               String                           @id @default(uuid())
+  title            String
+  body             String
+  data             Json?
+  targetType       NotificationBroadcastTargetType
+  status           NotificationBroadcastStatus     @default(DRAFT)
+  scheduledAt      DateTime?
+  totalRecipients  Int                              @default(0)
+  sentCount        Int                              @default(0)
+  failedCount      Int                              @default(0)
+  errorMessage     String?
+  sentAt           DateTime?
+  createdByAdminId String
+  createdBy        Admin                            @relation(fields: [createdByAdminId], references: [id])
+  createdAt        DateTime                         @default(now())
+  updatedAt        DateTime                         @updatedAt
+
+  recipients NotificationBroadcastRecipient[]
+}
+
+enum NotificationBroadcastRecipientStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model NotificationBroadcastRecipient {
+  id                      String                                @id @default(uuid())
+  notificationBroadcastId String
+  notificationBroadcast   NotificationBroadcast                 @relation(fields: [notificationBroadcastId], references: [id], onDelete: Cascade)
+  userId                  String
+  user                    User                                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userNotificationId      String?
+  status                  NotificationBroadcastRecipientStatus @default(PENDING)
+  sentAt                  DateTime?
+  error                   String?
+
+  @@unique([notificationBroadcastId, userId])
+  @@index([notificationBroadcastId, status])
 }

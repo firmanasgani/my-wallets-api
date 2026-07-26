@@ -6,9 +6,10 @@ import { SubscriptionsService } from './subscriptions.service';
 import { LogsModule } from '../logs/logs.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { MinioModule } from '../common/minio/minio.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [ConfigModule, LogsModule, PrismaModule, MinioModule],
+  imports: [ConfigModule, LogsModule, PrismaModule, MinioModule, NotificationsModule],
   controllers: [SubscriptionsController, MidtransNotificationController],
   providers: [SubscriptionsService],
   exports: [SubscriptionsService],

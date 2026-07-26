@@ -8,9 +8,10 @@ import { PrismaModule } from 'src/prisma/prisma.module';
 import { UsersModule } from 'src/users/users.module';
 import { AdminsModule } from 'src/admin/admins/admins.module';
 import { AdminAuthModule } from 'src/admin/auth/admin-auth.module';
+import { NotificationsModule } from 'src/notifications/notifications.module';
 
 @Module({
-  imports: [ConfigModule, PrismaModule, UsersModule, AdminsModule, AdminAuthModule],
+  imports: [ConfigModule, PrismaModule, UsersModule, AdminsModule, AdminAuthModule, NotificationsModule],
   controllers: [ChatController, AdminChatController],
   providers: [ChatService, ChatGateway],
 })

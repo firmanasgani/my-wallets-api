@@ -12,6 +12,7 @@ import { LogsService } from '../logs/logs.service';
 import { MinioService } from '../common/minio/minio.service';
 import {
   LogActionType,
+  NotificationType,
   PaymentMethod,
   PaymentStatus,
   Prisma,
@@ -20,6 +21,8 @@ import {
 } from '@prisma/client';
 import * as crypto from 'crypto';
 import { randomUUID } from 'crypto';
+import { UserNotificationsService } from '../notifications/user-notifications/user-notifications.service';
+import { AdminNotificationsService } from '../notifications/admin-notifications/admin-notifications.service';
 
 @Injectable()
 export class SubscriptionsService {
@@ -30,6 +33,8 @@ export class SubscriptionsService {
     private configService: ConfigService,
     private logsService: LogsService,
     private minioService: MinioService,
+    private userNotificationsService: UserNotificationsService,
+    private adminNotificationsService: AdminNotificationsService,
   ) {}
 
   async getPlans() {
@@ -364,6 +369,14 @@ export class SubscriptionsService {
         description: `Payment failed for order ${orderId}. Status: ${transactionStatus}`,
         details: { orderId, transactionStatus },
       });
+
+      await this.userNotificationsService.create({
+        userId: payment.userId,
+        type: NotificationType.PAYMENT_FAILED,
+        title: 'Payment failed',
+        body: `Your payment for ${payment.plan.name} could not be completed.`,
+        data: { orderId, paymentId: payment.id },
+      });
     }
 
     return { status: 'OK' };
@@ -455,6 +468,14 @@ export class SubscriptionsService {
           description: `Recurring payment failed for order ${orderId}. Status: ${transactionStatus}`,
           details: { orderId, transactionStatus },
         });
+
+        await this.userNotificationsService.create({
+          userId: existingPayment.userId,
+          type: NotificationType.PAYMENT_FAILED,
+          title: 'Payment failed',
+          body: `Your recurring payment for ${existingPayment.plan.name} could not be completed.`,
+          data: { orderId, paymentId: existingPayment.id },
+        });
       }
 
       return { status: 'OK' };
@@ -542,6 +563,14 @@ export class SubscriptionsService {
         entityId: newPayment.id,
         description: `Auto-recurring payment failed for order ${orderId}. Subscription may expire soon.`,
         details: { orderId, transactionStatus },
+      });
+
+      await this.userNotificationsService.create({
+        userId: user.id,
+        type: NotificationType.PAYMENT_FAILED,
+        title: 'Payment failed',
+        body: `Your recurring payment for ${activePlan.name} could not be completed. Your subscription may expire soon.`,
+        data: { orderId, paymentId: newPayment.id },
       });
     }
 
@@ -660,6 +689,24 @@ export class SubscriptionsService {
         },
       }),
     ]);
+
+    // Single choke point for every successful payment path (Midtrans
+    // webhook, recurring charge, manual admin approval), so this fires
+    // exactly once per activation instead of being duplicated per caller.
+    await this.userNotificationsService.create({
+      userId,
+      type: NotificationType.PAYMENT_SUCCESS,
+      title: 'Payment successful',
+      body: `Your payment was successful. Plan upgraded to ${plan.name}.`,
+      data: { paymentId, planCode: plan.code },
+    });
+
+    await this.adminNotificationsService.fanOutToAllActiveAdmins({
+      type: NotificationType.PAYMENT_SUCCESS,
+      title: 'Payment received',
+      body: description,
+      data: { paymentId, userId, planCode: plan.code },
+    });
   }
 
   /**
@@ -779,6 +826,13 @@ export class SubscriptionsService {
       details: { orderId, planCode, amount },
     });
 
+    await this.adminNotificationsService.fanOutToAllActiveAdmins({
+      type: NotificationType.PAYMENT_PENDING_REVIEW,
+      title: 'Manual payment awaiting review',
+      body: `A manual transfer proof for ${plan.name} needs review.`,
+      data: { orderId, paymentId: payment.id, planCode },
+    });
+
     return payment;
   }
 
@@ -840,6 +894,7 @@ export class SubscriptionsService {
         method: PaymentMethod.MANUAL_TRANSFER,
         status: PaymentStatus.PENDING_REVIEW,
       },
+      include: { plan: true },
     });
     if (!payment) {
       throw new NotFoundException(
@@ -864,6 +919,14 @@ export class SubscriptionsService {
       entityId: payment.id,
       description: `Manual payment for order ${payment.orderId} rejected by admin`,
       details: { orderId: payment.orderId, reason },
+    });
+
+    await this.userNotificationsService.create({
+      userId: payment.userId,
+      type: NotificationType.PAYMENT_FAILED,
+      title: 'Payment rejected',
+      body: `Your manual payment for ${payment.plan.name} was rejected.${reason ? ` Reason: ${reason}` : ''}`,
+      data: { orderId: payment.orderId, paymentId: payment.id, rejectionReason: reason ?? null },
     });
 
     return updated;
