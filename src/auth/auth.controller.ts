@@ -12,13 +12,14 @@ import {
   UploadedFile,
   BadRequestException,
   Delete,
+  Res,
 } from '@nestjs/common';
 import { RegisterDto } from './dto/register.dto';
 import { AuthService } from './auth.service';
 import { User, User as UserModel } from '@prisma/client';
 import { LoginDto } from './dto/login.dto';
 import { GetUser } from 'src/common/decorators/get-user.decorator';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Public } from './decorators/public.decorator';
@@ -44,7 +45,11 @@ export class AuthController {
   @Public()
   @HttpCode(HttpStatus.OK)
   @Post('login')
-  async login(@Body() loginDto: LoginDto, @Req() req: Request) {
+  async login(
+    @Body() loginDto: LoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
     const ipAddress = req.ip;
     const userAgent = req.headers['user-agent'];
     const user = await this.authService.validateUser(
@@ -55,7 +60,71 @@ export class AuthController {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    return this.authService.login(user, ipAddress, userAgent);
+    const result = await this.authService.login(user, ipAddress, userAgent);
+    const refresh = this.authService.issueRefreshToken(user);
+    this.setRefreshTokenCookie(
+      response,
+      refresh.refreshToken,
+      refresh.expiresAt,
+    );
+
+    return result;
+  }
+
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @Post('refresh')
+  async refresh(
+    @Req() req: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const refreshToken = this.getCookie(req, 'refresh_token');
+    if (!refreshToken) {
+      throw new UnauthorizedException('Refresh token is required');
+    }
+
+    const result = await this.authService.refresh(refreshToken);
+    this.setRefreshTokenCookie(
+      response,
+      result.refresh.refreshToken,
+      result.refresh.expiresAt,
+    );
+
+    return { access_token: result.access_token };
+  }
+
+  private setRefreshTokenCookie(
+    response: Response,
+    token: string,
+    expires: Date,
+  ): void {
+    response.cookie('refresh_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/auth',
+      expires,
+    });
+  }
+
+  private getCookie(req: Request, name: string): string | undefined {
+    const cookieHeader = req.headers.cookie;
+    if (!cookieHeader) return undefined;
+
+    for (const cookie of cookieHeader.split(';')) {
+      const separatorIndex = cookie.indexOf('=');
+      if (separatorIndex === -1) continue;
+      const cookieName = cookie.slice(0, separatorIndex).trim();
+      if (cookieName === name) {
+        try {
+          return decodeURIComponent(cookie.slice(separatorIndex + 1).trim());
+        } catch {
+          return undefined;
+        }
+      }
+    }
+
+    return undefined;
   }
 
   @Get('profile')

@@ -29,6 +29,10 @@ import { Resend } from 'resend';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ConfigService } from '@nestjs/config';
+import { JwtPayload } from './interfaces/jwt-payload.interface';
+import { RefreshTokenResult } from './interfaces/refresh-token-result.interface';
+import { SignOptions } from 'jsonwebtoken';
 
 @Injectable()
 export class AuthService {
@@ -41,6 +45,7 @@ export class AuthService {
     private prisma: PrismaService,
     private logsService: LogsService,
     private minioService: MinioService,
+    private configService: ConfigService,
   ) {}
 
   async register(
@@ -138,27 +143,26 @@ export class AuthService {
       } catch (error) {
         if (error instanceof Error) {
           Logger.error('Failed to create log entry', {
-          errorMessage: error.message,
-          dto: {
-            userId: newUserAndCategories.id,
-            actionType: LogActionType.USER_REGISTER,
-            entityType: 'USER',
-            entityId: newUserAndCategories.id,
-            description: `User ${newUserAndCategories.username} registered`,
-            details: {
-              username: newUserAndCategories.username,
-              method: 'credentials',
+            errorMessage: error.message,
+            dto: {
+              userId: newUserAndCategories.id,
+              actionType: LogActionType.USER_REGISTER,
+              entityType: 'USER',
+              entityId: newUserAndCategories.id,
+              description: `User ${newUserAndCategories.username} registered`,
+              details: {
+                username: newUserAndCategories.username,
+                method: 'credentials',
+              },
+              ipAddress: ipAddress ?? '',
+              userAgent: userAgent ?? '',
             },
-            ipAddress: ipAddress ?? '',
-            userAgent: userAgent ?? '',
-          },
-          stack: error.stack,
-        });
-        }else {
+            stack: error.stack,
+          });
+        } else {
           Logger.error('Failed to create log entry (non-error thrown)', {
-      error,
-    });
-
+            error,
+          });
         }
       }
       const { passwordHash, ...result } = newUserAndCategories;
@@ -219,15 +223,86 @@ export class AuthService {
           userId: user.id,
         });
       } else {
-        Logger.error('Failed to create log entry for login (non-error thrown)', {
-          error,
-        });
+        Logger.error(
+          'Failed to create log entry for login (non-error thrown)',
+          {
+            error,
+          },
+        );
       }
     }
     return {
       access_token: this.jwtService.sign(payload),
       user,
     };
+  }
+
+  issueRefreshToken(user: Pick<User, 'id' | 'username'>): RefreshTokenResult {
+    const expiresIn =
+      this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d';
+    const refreshToken = this.jwtService.sign(
+      {
+        sub: user.id,
+        username: user.username,
+        type: 'refresh',
+        jti: randomUUID(),
+      },
+      {
+        secret: this.getRefreshTokenSecret(),
+        expiresIn: expiresIn as SignOptions['expiresIn'],
+      },
+    );
+    const decoded: unknown = this.jwtService.decode(refreshToken);
+    if (
+      !decoded ||
+      typeof decoded !== 'object' ||
+      !('exp' in decoded) ||
+      typeof decoded.exp !== 'number'
+    ) {
+      throw new InternalServerErrorException('Failed to issue refresh token');
+    }
+
+    return {
+      refreshToken,
+      expiresAt: new Date(decoded.exp * 1000),
+    };
+  }
+
+  async refresh(refreshToken: string) {
+    let payload: JwtPayload;
+
+    try {
+      payload = await this.jwtService.verifyAsync<JwtPayload>(refreshToken, {
+        secret: this.getRefreshTokenSecret(),
+      });
+    } catch {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    if (payload.type !== 'refresh') {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const user = await this.usersService.findById(payload.sub);
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('User not found or account deactivated');
+    }
+
+    return {
+      access_token: this.jwtService.sign({
+        username: user.username,
+        sub: user.id,
+      }),
+      refresh: this.issueRefreshToken(user),
+    };
+  }
+
+  private getRefreshTokenSecret(): string {
+    return (
+      this.configService.get<string>('JWT_REFRESH_SECRET') ||
+      this.configService.get<string>('JWT_SECRET') ||
+      'secret'
+    );
   }
 
   async changePassword(
@@ -289,13 +364,16 @@ export class AuthService {
       } catch (error) {
         if (error instanceof Error) {
           Logger.error('Failed to create log entry for password change', {
-          errorMessage: error.message,
-          userId: user.id,
-        });
+            errorMessage: error.message,
+            userId: user.id,
+          });
         } else {
-          Logger.error('Failed to create log entry for password change (non-error thrown)', {
-      error,
-    });
+          Logger.error(
+            'Failed to create log entry for password change (non-error thrown)',
+            {
+              error,
+            },
+          );
         }
       }
 
@@ -356,7 +434,7 @@ export class AuthService {
         try {
           await this.minioService.deleteFile(user.profilePicture);
         } catch (error) {
-          if(error instanceof Error) {
+          if (error instanceof Error) {
             Logger.warn(
               `Failed to delete old profile picture: ${error.message}`,
               {
@@ -400,16 +478,22 @@ export class AuthService {
           userAgent: userAgent ?? '',
         });
       } catch (error) {
-        if(error instanceof Error) {
-          Logger.error('Failed to create log entry for profile picture update', {
-            errorMessage: error.message,
-            userId,
-          });
+        if (error instanceof Error) {
+          Logger.error(
+            'Failed to create log entry for profile picture update',
+            {
+              errorMessage: error.message,
+              userId,
+            },
+          );
         } else {
-          Logger.error('Failed to create log entry for profile picture update (non-error thrown)', {
-            userId,
-            error,
-          });
+          Logger.error(
+            'Failed to create log entry for profile picture update (non-error thrown)',
+            {
+              userId,
+              error,
+            },
+          );
         }
       }
 
@@ -422,16 +506,16 @@ export class AuthService {
         profilePicturePath: filePath,
       };
     } catch (error) {
-      if(error instanceof Error) {
+      if (error instanceof Error) {
         Logger.error('Error updating profile picture', error);
-      Logger.error(`Error details: ${error.message}`);
+        Logger.error(`Error details: ${error.message}`);
       } else {
         Logger.error('Error updating profile picture (non-error thrown)', {
           error,
         });
       }
-      
-        throw new BadRequestException('Failed to update profile picture');
+
+      throw new BadRequestException('Failed to update profile picture');
     }
   }
 
@@ -479,16 +563,22 @@ export class AuthService {
           userAgent: userAgent ?? '',
         });
       } catch (error) {
-        if(error instanceof Error) {
-          Logger.error('Failed to create log entry for profile picture deletion', {
-            errorMessage: error.message,
-            userId,
-          });
+        if (error instanceof Error) {
+          Logger.error(
+            'Failed to create log entry for profile picture deletion',
+            {
+              errorMessage: error.message,
+              userId,
+            },
+          );
         } else {
-          Logger.error('Failed to create log entry for profile picture deletion (non-error thrown)', {
-            userId,
-            error,
-          });
+          Logger.error(
+            'Failed to create log entry for profile picture deletion (non-error thrown)',
+            {
+              userId,
+              error,
+            },
+          );
         }
       }
 
@@ -516,7 +606,9 @@ export class AuthService {
     const activeMembership = await this.prisma.companyMember.findFirst({
       where: {
         userId,
-        status: { in: [CompanyMemberStatus.ACTIVE, CompanyMemberStatus.PENDING] },
+        status: {
+          in: [CompanyMemberStatus.ACTIVE, CompanyMemberStatus.PENDING],
+        },
       },
     });
 
@@ -543,7 +635,7 @@ export class AuthService {
         try {
           await this.minioService.deleteFile(user.profilePicture);
         } catch (error) {
-          if(error instanceof Error) {
+          if (error instanceof Error) {
             Logger.warn(
               `Failed to delete profile picture during account deletion: ${error.message}`,
             );
@@ -634,15 +726,18 @@ export class AuthService {
           user.profilePicture,
         );
       } catch (error) {
-        if(error instanceof Error) {
+        if (error instanceof Error) {
           Logger.error('Error generating profile picture URL', error);
-        Logger.error(`Error details: ${error.message}`);
+          Logger.error(`Error details: ${error.message}`);
         } else {
-          Logger.error('Error generating profile picture URL (non-error thrown)', {
-            error,
-          });
+          Logger.error(
+            'Error generating profile picture URL (non-error thrown)',
+            {
+              error,
+            },
+          );
         }
-        
+
         throw new BadRequestException('Failed to generate profile picture URL');
       }
     }
@@ -657,7 +752,7 @@ export class AuthService {
 
     let displayPlan = 'FREE';
     const planCode = activeSubscription?.plan?.code;
-    
+
     if (planCode) {
       if (planCode.startsWith('PREMIUM')) {
         displayPlan = 'PREMIUM';
@@ -696,23 +791,29 @@ export class AuthService {
       return { message: 'If the email is registered, an OTP has been sent.' };
     }
 
-    if(email == 'demo@firmanasgani.id') {
-      throw new BadRequestException('This account is for demo purposes only. Cannot use forgot password feature.');
+    if (email == 'demo@firmanasgani.id') {
+      throw new BadRequestException(
+        'This account is for demo purposes only. Cannot use forgot password feature.',
+      );
     }
-    
+
     // Rate Limiting (In-memory, 1 request per 1 minute)
     const now = Date.now();
     const lastRequestTime = this.otpRequestTimeStore.get(email);
     const cooldownPeriod = 60 * 1000; // 1 minute in milliseconds
 
     if (lastRequestTime && now - lastRequestTime < cooldownPeriod) {
-      const waitTimeMath = Math.ceil((cooldownPeriod - (now - lastRequestTime)) / 1000);
-      throw new BadRequestException(`Harap tunggu ${waitTimeMath} detik sebelum meminta OTP baru.`);
+      const waitTimeMath = Math.ceil(
+        (cooldownPeriod - (now - lastRequestTime)) / 1000,
+      );
+      throw new BadRequestException(
+        `Harap tunggu ${waitTimeMath} detik sebelum meminta OTP baru.`,
+      );
     }
 
     // Update last request time
     this.otpRequestTimeStore.set(email, now);
-    
+
     // Cleanup old entries (optional, to prevent memory leak long-term)
     if (this.otpRequestTimeStore.size > 1000) {
       for (const [key, time] of this.otpRequestTimeStore.entries()) {
@@ -735,7 +836,9 @@ export class AuthService {
     });
 
     const resend = new Resend(process.env.RESEND_API_KEY);
-    const fromAddress = (process.env.SMTP_FROM || 'Moneytory <noreply@moneytory.com>').replace(/^["']|["']$/g, '');
+    const fromAddress = (
+      process.env.SMTP_FROM || 'Moneytory <noreply@moneytory.com>'
+    ).replace(/^["']|["']$/g, '');
 
     try {
       const { error } = await resend.emails.send({
@@ -857,13 +960,19 @@ export class AuthService {
           </html>
         `,
       });
-      
+
       if (error) {
-        Logger.error('Failed to send OTP email via Resend', JSON.stringify(error));
+        Logger.error(
+          'Failed to send OTP email via Resend',
+          JSON.stringify(error),
+        );
         throw new InternalServerErrorException('Failed to send OTP email');
       }
     } catch (error) {
-      Logger.error('Exception when sending OTP email', error instanceof Error ? error.message : JSON.stringify(error));
+      Logger.error(
+        'Exception when sending OTP email',
+        error instanceof Error ? error.message : JSON.stringify(error),
+      );
       throw new InternalServerErrorException('Failed to send OTP email');
     }
 
@@ -878,7 +987,10 @@ export class AuthService {
       throw new BadRequestException('Invalid OTP');
     }
 
-    if (user.resetPasswordOtpExpires && new Date() > user.resetPasswordOtpExpires) {
+    if (
+      user.resetPasswordOtpExpires &&
+      new Date() > user.resetPasswordOtpExpires
+    ) {
       throw new BadRequestException('OTP has expired');
     }
 
@@ -909,7 +1021,10 @@ export class AuthService {
       throw new BadRequestException('Invalid token');
     }
 
-    if (user.resetPasswordTokenExpires && new Date() > user.resetPasswordTokenExpires) {
+    if (
+      user.resetPasswordTokenExpires &&
+      new Date() > user.resetPasswordTokenExpires
+    ) {
       throw new BadRequestException('Token has expired');
     }
 
