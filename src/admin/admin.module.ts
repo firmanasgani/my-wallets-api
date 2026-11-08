@@ -9,6 +9,7 @@ import { AdminSubscriptionsModule } from './subscriptions/admin-subscriptions.mo
 import { AdminAnnouncementsModule } from './announcements/admin-announcements.module';
 import { AdminEmailBlastsModule } from './email-blasts/admin-email-blasts.module';
 import { AdminNotificationBroadcastsModule } from './notification-broadcasts/admin-notification-broadcasts.module';
+import { AdminIntegrationsModule } from './integrations/admin-integrations.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { AdminNotificationBroadcastsModule } from './notification-broadcasts/adm
     AdminAnnouncementsModule,
     AdminEmailBlastsModule,
     AdminNotificationBroadcastsModule,
+    AdminIntegrationsModule,
   ],
 })
 export class AdminModule {}

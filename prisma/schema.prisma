@@ -295,6 +295,8 @@ enum LogActionType {
   NOTIFICATION_BROADCAST_CANCEL
   NOTIFICATION_BROADCAST_SENT
   NOTIFICATION_BROADCAST_FAILED
+
+  PAYFEST_CONFIG_UPDATE
 }
 
 model PaymentTransaction {
@@ -332,6 +334,25 @@ enum PaymentStatus {
 enum PaymentMethod {
   MIDTRANS
   MANUAL_TRANSFER
+}
+
+// Admin-configurable credentials for the Payfest (Dashboard Financial API)
+// integration — see getting-started.md in that repo. Singleton row (id is
+// always the fixed string "payfest"), read/written only via
+// src/admin/integrations. apiSecretEncrypted/webhookSecretEncrypted are
+// AES-256-GCM ciphertext (src/common/crypto/secret-encryption.service.ts) —
+// the plaintext is never read back once saved, only re-encrypted on update.
+model PayfestConfig {
+  id                     String   @id @default("payfest")
+  baseUrl                String   @default("https://api-financial.firmanasgani.id")
+  accessKeyId            String?
+  apiSecretEncrypted     String?
+  webhookSecretEncrypted String?
+  isEnabled              Boolean  @default(false)
+  updatedByAdminId       String?
+  updatedBy              Admin?   @relation(fields: [updatedByAdminId], references: [id], onDelete: SetNull)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 }
 
 model Log {
@@ -950,6 +971,7 @@ model Admin {
   emailBlasts      EmailBlast[]
   notifications          AdminNotification[]
   notificationBroadcasts NotificationBroadcast[]
+  payfestConfigUpdates   PayfestConfig[]
 }
 
 model Announcement {
