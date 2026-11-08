@@ -23,6 +23,29 @@ import * as crypto from 'crypto';
 import { randomUUID } from 'crypto';
 import { UserNotificationsService } from '../notifications/user-notifications/user-notifications.service';
 import { AdminNotificationsService } from '../notifications/admin-notifications/admin-notifications.service';
+import { PayfestClientService } from '../payfest/payfest-client.service';
+
+// Maps Payfest's payment.status wire values (docs/api-contract-consumer.md
+// §4.3 in dashboard-financial-api) onto this app's PaymentStatus. Refund
+// variants (refunded/partially_refunded/chargeback) are intentionally
+// unmapped — this subscription model has no refund flow to drive from
+// them yet, same as the Midtrans path.
+function mapPayfestStatus(
+  payfestStatus: string | undefined,
+): PaymentStatus | null {
+  switch (payfestStatus) {
+    case 'succeeded':
+      return PaymentStatus.SUCCESS;
+    case 'failed':
+      return PaymentStatus.FAILED;
+    case 'expired':
+      return PaymentStatus.EXPIRED;
+    case 'cancelled':
+      return PaymentStatus.CANCELLED;
+    default:
+      return null;
+  }
+}
 
 @Injectable()
 export class SubscriptionsService {
@@ -35,6 +58,7 @@ export class SubscriptionsService {
     private minioService: MinioService,
     private userNotificationsService: UserNotificationsService,
     private adminNotificationsService: AdminNotificationsService,
+    private payfestClient: PayfestClientService,
   ) {}
 
   async getPlans() {
@@ -52,10 +76,33 @@ export class SubscriptionsService {
     return plan;
   }
 
-  async createCheckoutToken(userId: string, planCode: string) {
+  // Empty array (not an error) when Payfest isn't enabled — callers treat
+  // that as "fall back to the Midtrans Snap checkout, which picks its own
+  // method via its widget" rather than failing checkout entirely.
+  async getAvailablePaymentMethods() {
+    if (!(await this.payfestClient.isEnabled())) {
+      return { provider: 'midtrans', methods: [] };
+    }
+    const methods = await this.payfestClient.listPaymentMethods();
+    return { provider: 'payfest', methods };
+  }
+
+  async createCheckoutToken(
+    userId: string,
+    planCode: string,
+    paymentMethodCode?: string,
+  ) {
     const plan = await this.getPlanByCode(planCode);
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
+
+    // Only take the Payfest path when both the integration is on AND the
+    // caller actually picked a channel — a client that hasn't been
+    // updated to call GET /subscriptions/payment-methods first keeps
+    // getting the exact same Midtrans Snap flow as before, unchanged.
+    if (paymentMethodCode && (await this.payfestClient.isEnabled())) {
+      return this.createPayfestCheckout(user, plan, paymentMethodCode);
+    }
 
     const orderId = `SUB-${userId.substring(0, 8)}-${Date.now()}`;
     const amount = Number(plan.discountPrice || plan.price);
@@ -159,6 +206,67 @@ export class SubscriptionsService {
     }
   }
 
+  private async createPayfestCheckout(
+    user: {
+      id: string;
+      email: string;
+      username: string;
+      fullName: string | null;
+    },
+    plan: SubscriptionPlan,
+    paymentMethodCode: string,
+  ) {
+    const amount = Math.round(Number(plan.discountPrice || plan.price));
+
+    await this.payfestClient.upsertCustomer(user.id, user.email, {
+      username: user.username,
+    });
+
+    const payment = await this.payfestClient.createPayment({
+      customerRef: user.id,
+      amountMinor: amount,
+      currency: 'IDR',
+      description: `${plan.name} subscription`,
+      paymentMethodCode,
+      metadata: { planCode: plan.code, userId: user.id },
+    });
+
+    await this.prisma.paymentTransaction.create({
+      data: {
+        orderId: payment.order_id,
+        userId: user.id,
+        planId: plan.id,
+        amount,
+        status: PaymentStatus.PENDING,
+        method: PaymentMethod.PAYFEST,
+        payfestPaymentId: payment.id,
+        paymentMethodCode,
+        payfestCheckout: (payment.checkout ?? {}) as Prisma.JsonObject,
+      },
+    });
+
+    await this.logsService.create({
+      userId: user.id,
+      actionType: LogActionType.SUBSCRIPTION_CHECKOUT,
+      entityType: 'SubscriptionPlan',
+      entityId: plan.id,
+      description: `User initiated Payfest checkout for ${plan.name} via ${paymentMethodCode}`,
+      details: {
+        orderId: payment.order_id,
+        planCode: plan.code,
+        amount,
+        paymentMethodCode,
+      },
+    });
+
+    return {
+      provider: 'payfest',
+      order_id: payment.order_id,
+      status: payment.status,
+      checkout: payment.checkout,
+    };
+  }
+
   async getPaymentHistory(userId: string) {
     return this.prisma.paymentTransaction.findMany({
       where: { userId },
@@ -186,6 +294,17 @@ export class SubscriptionsService {
       throw new NotFoundException(
         'Pending payment not found for the given order ID',
       );
+    }
+
+    // Payfest never re-exposes checkout instructions after creation
+    // (see createPayfestCheckout) — what was saved at creation time is
+    // all there is to show again, there is no "generate a new one" call.
+    if (payment.method === PaymentMethod.PAYFEST) {
+      return {
+        provider: 'payfest',
+        order_id: payment.orderId,
+        checkout: payment.payfestCheckout,
+      };
     }
 
     // Jika snap token masih tersimpan, kembalikan langsung
@@ -384,6 +503,96 @@ export class SubscriptionsService {
     }
 
     return { status: 'OK' };
+  }
+
+  /**
+   * Payfest's webhook (docs/api-contract-consumer.md §4 in
+   * dashboard-financial-api) — unlike Midtrans's, delivery is currently
+   * best-effort/single-attempt on Payfest's side, and events can arrive
+   * more than once, so this must be a no-op on replay (checked below via
+   * payment.status already matching).
+   */
+  async handlePayfestWebhook(
+    rawBody: string,
+    timestamp: string,
+    signature: string,
+  ) {
+    const valid = await this.payfestClient.verifyWebhookSignature(
+      rawBody,
+      timestamp,
+      signature,
+    );
+    if (!valid) {
+      this.logger.warn('[Payfest Webhook] Invalid or missing signature');
+      return { status: 'ok' };
+    }
+
+    const envelope = JSON.parse(rawBody) as {
+      data?: {
+        payment_id?: string;
+        order_id?: string;
+        status?: string;
+      };
+    };
+    const data = envelope.data ?? {};
+    const { payment_id: payfestPaymentId, order_id: orderId, status } = data;
+
+    const payment = await this.prisma.paymentTransaction.findFirst({
+      where: {
+        OR: [
+          ...(payfestPaymentId ? [{ payfestPaymentId }] : []),
+          ...(orderId ? [{ orderId }] : []),
+        ],
+      },
+      include: { plan: true },
+    });
+
+    if (!payment) {
+      this.logger.warn(
+        `[Payfest Webhook] No local payment for payfest payment_id=${payfestPaymentId} order_id=${orderId}`,
+      );
+      return { status: 'ok' };
+    }
+
+    const nextStatus = mapPayfestStatus(status);
+    if (!nextStatus || payment.status === nextStatus) {
+      // Unmapped status (e.g. refund variants, not modeled on this
+      // subscription yet) or already processed — no-op either way.
+      return { status: 'ok' };
+    }
+
+    await this.prisma.paymentTransaction.update({
+      where: { id: payment.id },
+      data: { status: nextStatus },
+    });
+
+    if (nextStatus === PaymentStatus.SUCCESS) {
+      await this.activateSubscriptionForPayment({
+        userId: payment.userId,
+        plan: payment.plan,
+        paymentId: payment.id,
+        description: `Payment success for order ${orderId} (Payfest). Plan upgraded to ${payment.plan.name}`,
+      });
+    } else {
+      await this.logsService.create({
+        userId: payment.userId,
+        actionType: LogActionType.PAYMENT_FAILED,
+        entityType: 'PaymentTransaction',
+        entityId: payment.id,
+        description: `Payment ${nextStatus.toLowerCase()} for order ${orderId} (Payfest). Status: ${status}`,
+        details: { orderId, payfestStatus: status },
+      });
+
+      await this.userNotificationsService.create({
+        userId: payment.userId,
+        type: NotificationType.PAYMENT_FAILED,
+        title: 'Payment failed',
+        body: `Your payment for ${payment.plan.name} could not be completed.`,
+        data: { orderId, paymentId: payment.id },
+      });
+    }
+
+    return { status: 'ok' };
   }
 
   /**

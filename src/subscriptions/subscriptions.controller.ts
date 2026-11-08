@@ -28,12 +28,25 @@ export class SubscriptionsController {
     return this.subscriptionsService.getPlanByCode(code);
   }
 
+  // The channels the client should let the user pick from before calling
+  // checkout — sourced from Payfest when it's enabled (Settings >
+  // Integrations), so the catalog there is the single source of truth
+  // instead of a hardcoded list on either side.
+  @Get('payment-methods')
+  async getPaymentMethods() {
+    return this.subscriptionsService.getAvailablePaymentMethods();
+  }
+
   @UseGuards(JwtAuthGuard)
   @Post('checkout')
-  async checkout(@Body() body: { planCode: string }, @Request() req) {
+  async checkout(
+    @Body() body: { planCode: string; paymentMethodCode?: string },
+    @Request() req,
+  ) {
     return this.subscriptionsService.createCheckoutToken(
       req.user.id,
       body.planCode,
+      body.paymentMethodCode,
     );
   }
 

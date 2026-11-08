@@ -311,6 +311,14 @@ model PaymentTransaction {
   method            PaymentMethod    @default(MIDTRANS)
   snapToken         String?
   midtransResponse  Json?
+  // Payfest (Dashboard Financial API) fields — populated only when method
+  // is PAYFEST. payfestCheckout is persisted here because Payfest itself
+  // never re-exposes checkout instructions after creation (see
+  // getting-started.md §3.3 in that repo) — resumePayment reads it back
+  // from here instead of re-requesting it.
+  payfestPaymentId  String?          @unique
+  payfestCheckout   Json?
+  paymentMethodCode String?
   proofImageUrl     String?
   approvedByAdminId String?
   approvedBy        Admin?           @relation("PaymentApprovedBy", fields: [approvedByAdminId], references: [id])
@@ -334,6 +342,7 @@ enum PaymentStatus {
 enum PaymentMethod {
   MIDTRANS
   MANUAL_TRANSFER
+  PAYFEST
 }
 
 // Admin-configurable credentials for the Payfest (Dashboard Financial API)

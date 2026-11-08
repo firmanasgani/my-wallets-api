@@ -3,7 +3,11 @@ import { AppModule } from './app.module';
 import { Logger, ValidationPipe } from '@nestjs/common';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody: true additionally exposes req.rawBody — needed to verify
+  // Payfest's webhook signature (HMAC over the exact bytes sent), which a
+  // re-serialized JSON body would not match. Every other route's normal
+  // parsed `body` is unaffected.
+  const app = await NestFactory.create(AppModule, { rawBody: true });
 
   app.useGlobalPipes(
     new ValidationPipe({
