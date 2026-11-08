@@ -78,10 +78,22 @@ export class PayfestClientService {
         'Payfest integration is not configured or not enabled — see Settings > Integrations',
       );
     }
+    let apiSecret: string;
+    try {
+      apiSecret = this.secrets.decrypt(config.apiSecretEncrypted);
+    } catch (err) {
+      // Almost always SETTINGS_ENCRYPTION_KEY not matching what the secret
+      // was encrypted with (changed/regenerated since it was saved) —
+      // surfaced plainly instead of a raw crypto error/"Internal server
+      // error" with no indication of what to check.
+      throw new InternalServerErrorException(
+        `Could not decrypt the stored Payfest API secret — SETTINGS_ENCRYPTION_KEY likely doesn't match the key it was saved with. Re-enter the secret in Settings > Integrations. (${(err as Error).message})`,
+      );
+    }
     return {
       baseUrl: config.baseUrl,
       accessKeyId: config.accessKeyId,
-      apiSecret: this.secrets.decrypt(config.apiSecretEncrypted),
+      apiSecret,
     };
   }
 
@@ -108,20 +120,39 @@ export class PayfestClientService {
     extraHeaders?: Record<string, string>,
   ): Promise<T> {
     const config = await this.resolveConfig();
-    const response = await fetch(`${config.baseUrl}${path}`, {
-      method,
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        'X-Access-Key': config.accessKeyId,
-        'X-Api-Secret': config.apiSecret,
-        ...extraHeaders,
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+
+    let response: Response;
+    try {
+      response = await fetch(`${config.baseUrl}${path}`, {
+        method,
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-Access-Key': config.accessKeyId,
+          'X-Api-Secret': config.apiSecret,
+          ...extraHeaders,
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+    } catch (err) {
+      // Network/DNS/TLS failure reaching Payfest's base URL — not a
+      // response Payfest sent us, so there's no error.message to read.
+      throw new ServiceUnavailableException(
+        `Could not reach Payfest at ${config.baseUrl}${path}: ${(err as Error).message}`,
+      );
+    }
 
     const text = await response.text();
-    const data: unknown = text ? JSON.parse(text) : undefined;
+    let data: unknown;
+    try {
+      data = text ? JSON.parse(text) : undefined;
+    } catch {
+      // Something other than Payfest's API answered — a proxy/WAF error
+      // page, maintenance page, etc. — raw text helps diagnose that.
+      throw new InternalServerErrorException(
+        `Payfest returned a non-JSON response (http ${response.status}): ${text.slice(0, 200)}`,
+      );
+    }
 
     if (!response.ok) {
       const errorBody = data as { error?: { message?: string } } | undefined;
