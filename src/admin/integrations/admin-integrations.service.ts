@@ -3,10 +3,18 @@ import { LogActionType, PayfestConfig } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { LogsService } from 'src/logs/logs.service';
 import { SecretEncryptionService } from 'src/common/crypto/secret-encryption.service';
+import { PayfestClientService } from 'src/payfest/payfest-client.service';
 import { UpdatePayfestConfigDto } from './dto/update-payfest-config.dto';
 
 const CONFIG_ID = 'payfest';
 const DEFAULT_BASE_URL = 'https://api-financial.firmanasgani.id';
+
+export interface PayfestPaymentMethodView {
+  code: string;
+  name: string;
+  sort_order: number;
+  isEnabled: boolean;
+}
 
 // What the admin UI is allowed to see — accessKeyId is not secret (it's
 // shown in the Payfest CMS too), but the actual secrets are only ever
@@ -28,6 +36,7 @@ export class AdminIntegrationsService {
     private readonly prisma: PrismaService,
     private readonly logsService: LogsService,
     private readonly secrets: SecretEncryptionService,
+    private readonly payfestClient: PayfestClientService,
   ) {}
 
   async getPayfestConfig(): Promise<PayfestConfigView> {
@@ -91,6 +100,50 @@ export class AdminIntegrationsService {
     });
 
     return this.toView(updated);
+  }
+
+  // Fetches the live catalog from Payfest (whatever is enabled for this
+  // app in the Payfest CMS) and marks which of those Moneytory has
+  // additionally opted out of locally (PayfestDisabledMethod). A code's
+  // absence from PayfestDisabledMethod means enabled — new channels
+  // Payfest adds show up here already enabled, no sync step needed.
+  async listPayfestPaymentMethods(): Promise<PayfestPaymentMethodView[]> {
+    const [methods, disabled] = await Promise.all([
+      this.payfestClient.listPaymentMethods(),
+      this.prisma.payfestDisabledMethod.findMany({ select: { code: true } }),
+    ]);
+    const disabledCodes = new Set(disabled.map((d) => d.code));
+    return methods.map((m) => ({
+      ...m,
+      isEnabled: !disabledCodes.has(m.code),
+    }));
+  }
+
+  async setPayfestMethodEnabled(
+    code: string,
+    isEnabled: boolean,
+    adminId: string,
+  ): Promise<{ code: string; isEnabled: boolean }> {
+    if (isEnabled) {
+      await this.prisma.payfestDisabledMethod.deleteMany({ where: { code } });
+    } else {
+      await this.prisma.payfestDisabledMethod.upsert({
+        where: { code },
+        create: { code, disabledByAdminId: adminId },
+        update: { disabledByAdminId: adminId },
+      });
+    }
+
+    await this.logsService.create({
+      adminId,
+      actionType: LogActionType.PAYFEST_METHOD_TOGGLED,
+      entityType: 'PayfestDisabledMethod',
+      entityId: code,
+      description: `Payfest payment method "${code}" ${isEnabled ? 'enabled' : 'disabled'} for Moneytory's checkout`,
+      details: { code, isEnabled },
+    });
+
+    return { code, isEnabled };
   }
 
   private toView(config: PayfestConfig | null): PayfestConfigView {

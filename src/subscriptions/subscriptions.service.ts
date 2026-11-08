@@ -83,8 +83,27 @@ export class SubscriptionsService {
     if (!(await this.payfestClient.isEnabled())) {
       return { provider: 'midtrans', methods: [] };
     }
-    const methods = await this.payfestClient.listPaymentMethods();
-    return { provider: 'payfest', methods };
+    const [methods, disabledCodes] = await Promise.all([
+      this.payfestClient.listPaymentMethods(),
+      this.disabledPayfestMethodCodes(),
+    ]);
+    return {
+      provider: 'payfest',
+      methods: methods.filter((m) => !disabledCodes.has(m.code)),
+    };
+  }
+
+  // Moneytory's own opt-out on top of whatever Payfest exposes for this
+  // app (Settings > Integrations > Payment methods) — kept here too,
+  // not just in the admin listing, so a client that calls
+  // POST /subscriptions/checkout directly with a disabled code is still
+  // rejected (see createPayfestCheckout) rather than relying on the UI
+  // never offering it.
+  private async disabledPayfestMethodCodes(): Promise<Set<string>> {
+    const disabled = await this.prisma.payfestDisabledMethod.findMany({
+      select: { code: true },
+    });
+    return new Set(disabled.map((d) => d.code));
   }
 
   async createCheckoutToken(
@@ -216,6 +235,13 @@ export class SubscriptionsService {
     plan: SubscriptionPlan,
     paymentMethodCode: string,
   ) {
+    const disabledCodes = await this.disabledPayfestMethodCodes();
+    if (disabledCodes.has(paymentMethodCode)) {
+      throw new BadRequestException(
+        `Payment method "${paymentMethodCode}" is not available`,
+      );
+    }
+
     const amount = Math.round(Number(plan.discountPrice || plan.price));
 
     await this.payfestClient.upsertCustomer(user.id, user.email, {

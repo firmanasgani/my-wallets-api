@@ -297,6 +297,7 @@ enum LogActionType {
   NOTIFICATION_BROADCAST_FAILED
 
   PAYFEST_CONFIG_UPDATE
+  PAYFEST_METHOD_TOGGLED
 }
 
 model PaymentTransaction {
@@ -359,9 +360,21 @@ model PayfestConfig {
   webhookSecretEncrypted String?
   isEnabled              Boolean  @default(false)
   updatedByAdminId       String?
-  updatedBy              Admin?   @relation(fields: [updatedByAdminId], references: [id], onDelete: SetNull)
+  updatedBy              Admin?   @relation("PayfestConfigUpdatedBy", fields: [updatedByAdminId], references: [id], onDelete: SetNull)
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
+}
+
+// Moneytory's own opt-out on top of Payfest's catalog: Payfest's app-level
+// enablement (set in the Payfest CMS) decides what GET /v1/payment-methods
+// returns at all; a row here additionally hides that code from Moneytory's
+// own checkout without touching the Payfest side. A code's absence here
+// means "enabled" — admins only need to record the ones they turned off.
+model PayfestDisabledMethod {
+  code              String   @id
+  disabledByAdminId String?
+  disabledBy        Admin?   @relation("PayfestMethodDisabledBy", fields: [disabledByAdminId], references: [id], onDelete: SetNull)
+  createdAt         DateTime @default(now())
 }
 
 model Log {
@@ -980,7 +993,8 @@ model Admin {
   emailBlasts      EmailBlast[]
   notifications          AdminNotification[]
   notificationBroadcasts NotificationBroadcast[]
-  payfestConfigUpdates   PayfestConfig[]
+  payfestConfigUpdates   PayfestConfig[]           @relation("PayfestConfigUpdatedBy")
+  payfestMethodToggles   PayfestDisabledMethod[]    @relation("PayfestMethodDisabledBy")
 }
 
 model Announcement {
