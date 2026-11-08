@@ -15,6 +15,7 @@ import {
   NotificationType,
   PaymentMethod,
   PaymentStatus,
+  PayfestWebhookLogStatus,
   Prisma,
   SubscriptionPlan,
   SubscriptionStatus,
@@ -543,82 +544,169 @@ export class SubscriptionsService {
     timestamp: string,
     signature: string,
   ) {
-    const valid = await this.payfestClient.verifyWebhookSignature(
-      rawBody,
-      timestamp,
-      signature,
-    );
-    if (!valid) {
-      this.logger.warn('[Payfest Webhook] Invalid or missing signature');
-      return { status: 'ok' };
-    }
-
-    const envelope = JSON.parse(rawBody) as {
-      data?: {
-        payment_id?: string;
-        order_id?: string;
-        status?: string;
-      };
+    // Best-effort parse up front purely so an invalid-signature or
+    // malformed delivery still logs *something* identifiable rather than
+    // just the raw bytes — none of these fields are trusted until the
+    // signature check below passes.
+    type PayfestWebhookEnvelope = {
+      id?: string;
+      type?: string;
+      data?: { payment_id?: string; order_id?: string; status?: string };
     };
+    let envelope: PayfestWebhookEnvelope = {};
+    try {
+      envelope = JSON.parse(rawBody) as PayfestWebhookEnvelope;
+    } catch {
+      // left as {} — logged as INVALID_SIGNATURE/malformed below
+    }
     const data = envelope.data ?? {};
     const { payment_id: payfestPaymentId, order_id: orderId, status } = data;
 
-    const payment = await this.prisma.paymentTransaction.findFirst({
-      where: {
-        OR: [
-          ...(payfestPaymentId ? [{ payfestPaymentId }] : []),
-          ...(orderId ? [{ orderId }] : []),
-        ],
-      },
-      include: { plan: true },
-    });
-
-    if (!payment) {
-      this.logger.warn(
-        `[Payfest Webhook] No local payment for payfest payment_id=${payfestPaymentId} order_id=${orderId}`,
+    try {
+      const valid = await this.payfestClient.verifyWebhookSignature(
+        rawBody,
+        timestamp,
+        signature,
       );
-      return { status: 'ok' };
-    }
+      if (!valid) {
+        this.logger.warn('[Payfest Webhook] Invalid or missing signature');
+        await this.logPayfestWebhook({
+          status: 'INVALID_SIGNATURE',
+          eventId: envelope.id,
+          eventType: envelope.type,
+          orderId,
+          payload: envelope,
+        });
+        return { status: 'ok' };
+      }
 
-    const nextStatus = mapPayfestStatus(status);
-    if (!nextStatus || payment.status === nextStatus) {
-      // Unmapped status (e.g. refund variants, not modeled on this
-      // subscription yet) or already processed — no-op either way.
-      return { status: 'ok' };
-    }
+      const payment = await this.prisma.paymentTransaction.findFirst({
+        where: {
+          OR: [
+            ...(payfestPaymentId ? [{ payfestPaymentId }] : []),
+            ...(orderId ? [{ orderId }] : []),
+          ],
+        },
+        include: { plan: true },
+      });
 
-    await this.prisma.paymentTransaction.update({
-      where: { id: payment.id },
-      data: { status: nextStatus },
-    });
+      if (!payment) {
+        this.logger.warn(
+          `[Payfest Webhook] No local payment for payfest payment_id=${payfestPaymentId} order_id=${orderId}`,
+        );
+        await this.logPayfestWebhook({
+          status: 'UNKNOWN_PAYMENT',
+          eventId: envelope.id,
+          eventType: envelope.type,
+          orderId,
+          payload: envelope,
+        });
+        return { status: 'ok' };
+      }
 
-    if (nextStatus === PaymentStatus.SUCCESS) {
-      await this.activateSubscriptionForPayment({
-        userId: payment.userId,
-        plan: payment.plan,
+      const nextStatus = mapPayfestStatus(status);
+      if (!nextStatus || payment.status === nextStatus) {
+        // Unmapped status (e.g. refund variants, not modeled on this
+        // subscription yet) or already processed — no-op either way.
+        await this.logPayfestWebhook({
+          status: 'IGNORED',
+          eventId: envelope.id,
+          eventType: envelope.type,
+          orderId,
+          paymentId: payment.id,
+          payload: envelope,
+        });
+        return { status: 'ok' };
+      }
+
+      await this.prisma.paymentTransaction.update({
+        where: { id: payment.id },
+        data: { status: nextStatus },
+      });
+
+      if (nextStatus === PaymentStatus.SUCCESS) {
+        await this.activateSubscriptionForPayment({
+          userId: payment.userId,
+          plan: payment.plan,
+          paymentId: payment.id,
+          description: `Payment success for order ${orderId} (Payfest). Plan upgraded to ${payment.plan.name}`,
+        });
+      } else {
+        await this.logsService.create({
+          userId: payment.userId,
+          actionType: LogActionType.PAYMENT_FAILED,
+          entityType: 'PaymentTransaction',
+          entityId: payment.id,
+          description: `Payment ${nextStatus.toLowerCase()} for order ${orderId} (Payfest). Status: ${status}`,
+          details: { orderId, payfestStatus: status },
+        });
+
+        await this.userNotificationsService.create({
+          userId: payment.userId,
+          type: NotificationType.PAYMENT_FAILED,
+          title: 'Payment failed',
+          body: `Your payment for ${payment.plan.name} could not be completed.`,
+          data: { orderId, paymentId: payment.id },
+        });
+      }
+
+      await this.logPayfestWebhook({
+        status: 'PROCESSED',
+        eventId: envelope.id,
+        eventType: envelope.type,
+        orderId,
         paymentId: payment.id,
-        description: `Payment success for order ${orderId} (Payfest). Plan upgraded to ${payment.plan.name}`,
+        payload: envelope,
       });
-    } else {
-      await this.logsService.create({
-        userId: payment.userId,
-        actionType: LogActionType.PAYMENT_FAILED,
-        entityType: 'PaymentTransaction',
-        entityId: payment.id,
-        description: `Payment ${nextStatus.toLowerCase()} for order ${orderId} (Payfest). Status: ${status}`,
-        details: { orderId, payfestStatus: status },
+      return { status: 'ok' };
+    } catch (err: unknown) {
+      // Always still ack 2xx — Payfest doesn't retry anyway (single
+      // best-effort attempt, see the class doc above), so refusing here
+      // only loses the event with no compensating benefit. The log row
+      // is what makes this failure visible to an admin.
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `[Payfest Webhook] Unexpected error: ${message}`,
+        err instanceof Error ? err.stack : undefined,
+      );
+      await this.logPayfestWebhook({
+        status: 'ERROR',
+        eventId: envelope.id,
+        eventType: envelope.type,
+        orderId,
+        payload: envelope,
+        errorMessage: message,
       });
-
-      await this.userNotificationsService.create({
-        userId: payment.userId,
-        type: NotificationType.PAYMENT_FAILED,
-        title: 'Payment failed',
-        body: `Your payment for ${payment.plan.name} could not be completed.`,
-        data: { orderId, paymentId: payment.id },
-      });
+      return { status: 'ok' };
     }
+  }
 
-    return { status: 'ok' };
+  private async logPayfestWebhook(params: {
+    status: PayfestWebhookLogStatus;
+    eventId?: string;
+    eventType?: string;
+    orderId?: string;
+    paymentId?: string;
+    payload: unknown;
+    errorMessage?: string;
+  }) {
+    try {
+      await this.prisma.payfestWebhookLog.create({
+        data: {
+          status: params.status,
+          eventId: params.eventId,
+          eventType: params.eventType,
+          orderId: params.orderId,
+          paymentId: params.paymentId,
+          payload: params.payload as Prisma.JsonObject,
+          errorMessage: params.errorMessage,
+        },
+      });
+    } catch (err: unknown) {
+      // Logging must never be the reason a webhook response fails.
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(`[Payfest Webhook] Failed to write log: ${message}`);
+    }
   }
 
   /**

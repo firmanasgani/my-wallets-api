@@ -10,6 +10,7 @@ import { AdminAnnouncementsModule } from './announcements/admin-announcements.mo
 import { AdminEmailBlastsModule } from './email-blasts/admin-email-blasts.module';
 import { AdminNotificationBroadcastsModule } from './notification-broadcasts/admin-notification-broadcasts.module';
 import { AdminIntegrationsModule } from './integrations/admin-integrations.module';
+import { AdminWebhookLogsModule } from './webhook-logs/admin-webhook-logs.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { AdminIntegrationsModule } from './integrations/admin-integrations.modul
     AdminEmailBlastsModule,
     AdminNotificationBroadcastsModule,
     AdminIntegrationsModule,
+    AdminWebhookLogsModule,
   ],
 })
 export class AdminModule {}

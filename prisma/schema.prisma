@@ -377,6 +377,33 @@ model PayfestDisabledMethod {
   createdAt         DateTime @default(now())
 }
 
+enum PayfestWebhookLogStatus {
+  PROCESSED
+  IGNORED
+  INVALID_SIGNATURE
+  UNKNOWN_PAYMENT
+  ERROR
+}
+
+// One row per inbound POST /payfest-notification — including rejected
+// ones (bad signature, unknown payment) — so Settings > Webhook Logs can
+// show the full delivery history Payfest's own CMS has for outbound
+// deliveries, from Moneytory's receiving side.
+model PayfestWebhookLog {
+  id           String                  @id @default(uuid())
+  eventId      String?
+  eventType    String?
+  orderId      String?
+  paymentId    String?
+  status       PayfestWebhookLogStatus
+  payload      Json
+  errorMessage String?
+  createdAt    DateTime                @default(now())
+
+  @@index([createdAt])
+  @@index([orderId])
+}
+
 model Log {
   id          String        @id @default(uuid())
   userId      String?
