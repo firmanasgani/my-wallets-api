@@ -77,12 +77,14 @@ export class SubscriptionsService {
     return plan;
   }
 
-  // Empty array (not an error) when Payfest isn't enabled — callers treat
-  // that as "fall back to the Midtrans Snap checkout, which picks its own
-  // method via its widget" rather than failing checkout entirely.
+  // Payfest is the only checkout path now (Midtrans is only reached
+  // through it) — available:false means checkout genuinely cannot
+  // succeed right now (integration off or misconfigured), not "fall back
+  // to something else." Callers should disable the Subscribe/Pay button
+  // and show why, rather than attempt checkout anyway.
   async getAvailablePaymentMethods() {
     if (!(await this.payfestClient.isEnabled())) {
-      return { provider: 'midtrans', methods: [] };
+      return { provider: 'payfest', available: false, methods: [] };
     }
     const [methods, disabledCodes] = await Promise.all([
       this.payfestClient.listPaymentMethods(),
@@ -90,6 +92,7 @@ export class SubscriptionsService {
     ]);
     return {
       provider: 'payfest',
+      available: true,
       methods: methods.filter((m) => !disabledCodes.has(m.code)),
     };
   }
@@ -107,123 +110,21 @@ export class SubscriptionsService {
     return new Set(disabled.map((d) => d.code));
   }
 
+  // Payfest is the only checkout path — Midtrans is only ever reached
+  // through it now (see PayfestClientService). This used to branch to a
+  // direct Midtrans Snap call when paymentMethodCode was omitted; that
+  // path is gone, so paymentMethodCode is required (the controller's DTO
+  // enforces this before it ever reaches here).
   async createCheckoutToken(
     userId: string,
     planCode: string,
-    paymentMethodCode?: string,
+    paymentMethodCode: string,
   ) {
     const plan = await this.getPlanByCode(planCode);
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
 
-    // Only take the Payfest path when both the integration is on AND the
-    // caller actually picked a channel — a client that hasn't been
-    // updated to call GET /subscriptions/payment-methods first keeps
-    // getting the exact same Midtrans Snap flow as before, unchanged.
-    if (paymentMethodCode && (await this.payfestClient.isEnabled())) {
-      return this.createPayfestCheckout(user, plan, paymentMethodCode);
-    }
-
-    const orderId = `SUB-${userId.substring(0, 8)}-${Date.now()}`;
-    const amount = Number(plan.discountPrice || plan.price);
-
-    const midtransServerKey = this.configService.get<string>(
-      'MIDTRANS_SERVER_KEY',
-    );
-    if (!midtransServerKey) {
-      throw new InternalServerErrorException('Midtrans Server Key not found');
-    }
-
-    const isProduction =
-      this.configService.get<string>('MIDTRANS_IS_PRODUCTION') === 'true';
-    const snapUrl = isProduction
-      ? 'https://app.midtrans.com/snap/v1/transactions'
-      : 'https://app.sandbox.midtrans.com/snap/v1/transactions';
-
-    const authString = Buffer.from(`${midtransServerKey}:`).toString('base64');
-
-    const payload = {
-      transaction_details: {
-        order_id: orderId,
-        gross_amount: amount,
-      },
-      customer_details: {
-        first_name: user.fullName || user.username,
-        email: user.email,
-      },
-      item_details: [
-        {
-          id: plan.id,
-          price: amount,
-          quantity: 1,
-          name: plan.name,
-        },
-      ],
-    };
-
-    try {
-      const response = await fetch(snapUrl, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          Authorization: `Basic ${authString}`,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error_messages?.[0] || 'Midtrans error');
-      }
-
-      // Record transaction
-      await this.prisma.paymentTransaction.create({
-        data: {
-          orderId,
-          userId,
-          planId: plan.id,
-          amount,
-          snapToken: data.token,
-          status: PaymentStatus.PENDING,
-        },
-      });
-
-      // Log
-      await this.logsService.create({
-        userId,
-        actionType: LogActionType.SUBSCRIPTION_CHECKOUT,
-        entityType: 'SubscriptionPlan',
-        entityId: plan.id,
-        description: `User initiated checkout for ${plan.name}`,
-        details: { orderId, planCode, amount },
-      });
-
-      // Log ke Google Sheets (fire-and-forget, tidak memblokir response)
-      this.logCheckoutToSheets({
-        userId,
-        email: user.email,
-        fullName: user.fullName || user.username,
-        planCode,
-        planName: plan.name,
-        amount,
-        orderId,
-      }).catch((err) =>
-        this.logger.warn(
-          `[GoogleSheets] Failed to log checkout: ${err.message}`,
-        ),
-      );
-
-      return {
-        snap_token: data.token,
-        redirect_url: data.redirect_url,
-      };
-    } catch (error) {
-      console.error('Midtrans Checkout Error:', error);
-      throw new InternalServerErrorException(
-        error.message || 'Failed to initiate payment',
-      );
-    }
+    return this.createPayfestCheckout(user, plan, paymentMethodCode);
   }
 
   private async createPayfestCheckout(
@@ -285,6 +186,20 @@ export class SubscriptionsService {
         paymentMethodCode,
       },
     });
+
+    // Fire-and-forget, same as the retired direct-Midtrans path used to
+    // do — a Sheets outage must never block checkout.
+    this.logCheckoutToSheets({
+      userId: user.id,
+      email: user.email,
+      fullName: user.fullName || user.username,
+      planCode: plan.code,
+      planName: plan.name,
+      amount,
+      orderId: payment.order_id,
+    }).catch((err) =>
+      this.logger.warn(`[GoogleSheets] Failed to log checkout: ${err.message}`),
+    );
 
     return {
       provider: 'payfest',

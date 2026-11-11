@@ -40,9 +40,14 @@ export class SubscriptionsController {
   @UseGuards(JwtAuthGuard)
   @Post('checkout')
   async checkout(
-    @Body() body: { planCode: string; paymentMethodCode?: string },
+    @Body() body: { planCode: string; paymentMethodCode: string },
     @Request() req,
   ) {
+    if (!body.paymentMethodCode) {
+      throw new BadRequestException(
+        'paymentMethodCode is required — call GET /subscriptions/payment-methods first',
+      );
+    }
     return this.subscriptionsService.createCheckoutToken(
       req.user.id,
       body.planCode,
